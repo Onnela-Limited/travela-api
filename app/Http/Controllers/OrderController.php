@@ -12,6 +12,8 @@ use App\Models\UserEsim;
 use App\Services\Esim\PhysicalSimIssuanceService;
 use App\Services\Esim\SimAssignmentService;
 use App\Services\EvPay\EvPayCheckoutService;
+use App\Support\BundleValidity;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -428,6 +430,7 @@ class OrderController extends Controller
      */
     private function createTrip(Order $order, array $tripData): Trip
     {
+        $tripData = $this->normalizeEsimDates($order, $tripData);
         return Trip::create([
             'order_id' => $order->id,
             'destination_country' => $tripData['destination_country'],
@@ -442,6 +445,7 @@ class OrderController extends Controller
      */
     private function updateTrip(Order $order, array $tripData): void
     {
+        $tripData = $this->normalizeEsimDates($order, $tripData);
         $trip = $order->trip;
 
         if ($trip) {
@@ -459,6 +463,17 @@ class OrderController extends Controller
     /**
      * Create order items
      */
+    private function normalizeEsimDates(Order $order, array $tripData): array
+    {
+        if ($this->simAssignment->orderSimType($order) === Esim::SIM_TYPE_ESIM) {
+            $tripData['departure_date'] = Carbon::parse($tripData['arrival_date'])
+                ->addDays(BundleValidity::DAYS)->toDateString();
+            $tripData['duration_days'] = BundleValidity::DAYS;
+        }
+
+        return $tripData;
+    }
+
     private function createOrderItems(Order $order, array $items): void
     {
         foreach ($items as $item) {
@@ -468,7 +483,7 @@ class OrderController extends Controller
                 'bundle_id' => $item['bundle_id'] ?? null,
                 'bundle_name' => $item['bundle_name'],
                 'data_amount' => $item['data_amount'] ?? null,
-                'validity_days' => $item['validity_days'] ?? null,
+                'validity_days' => $item['type'] === 'bundle' ? BundleValidity::DAYS : ($item['validity_days'] ?? null),
                 'price' => $item['price'],
                 'currency' => $item['currency'],
             ]);

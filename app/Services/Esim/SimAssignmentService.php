@@ -7,6 +7,8 @@ use App\Models\Order;
 use App\Models\Trip;
 use App\Models\UserEsim;
 use App\Support\OrderCheckout;
+use App\Support\ActivationSchedule;
+use App\Support\BundleValidity;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -346,14 +348,11 @@ class SimAssignmentService
         }
 
         $due = $this->activationDateIsDue($order);
-        if ($due) {
-            $this->notifyAssignmentDue($order);
-        }
 
         return [
             'assigned' => false,
             'sim_type' => Esim::SIM_TYPE_ESIM,
-            'reason' => $due ? 'awaiting_confirmation' : 'scheduled',
+            'reason' => $due ? 'activation_pending' : 'scheduled',
             'activation_date' => $this->activationDateIso($order),
             'order_id' => $order->id,
         ];
@@ -380,12 +379,9 @@ class SimAssignmentService
         }
 
         $due = $this->activationDateIsDue($order);
-        if ($due) {
-            $this->notifyAssignmentDue($order);
-        }
 
         return [
-            'status' => $due ? 'awaiting_confirmation' : 'scheduled',
+            'status' => $due ? 'activation_pending' : 'scheduled',
             'activation_date' => $this->activationDateIso($order),
             'order_id' => $order->id,
         ];
@@ -429,7 +425,9 @@ class SimAssignmentService
             return true;
         }
 
-        return $iso <= now()->toDateString();
+        return now(ActivationSchedule::TIMEZONE)->greaterThanOrEqualTo(
+            Carbon::parse($iso.' '.ActivationSchedule::REMINDER_TIME, ActivationSchedule::TIMEZONE)
+        );
     }
 
     public function rescheduleActivationDate(Order $order, string $iso): Order
@@ -440,7 +438,7 @@ class SimAssignmentService
             ]);
         }
 
-        if ($iso < now()->toDateString()) {
+        if ($iso < ActivationSchedule::today()) {
             throw ValidationException::withMessages([
                 'activation_date' => ['eSIM activation date cannot be in the past.'],
             ]);
@@ -464,20 +462,12 @@ class SimAssignmentService
             $trip = new Trip(['order_id' => $order->id]);
         }
 
-        $oldArrival = $trip->arrival_date
-            ? Carbon::parse($trip->arrival_date)->startOfDay()
-            : null;
-        $oldDeparture = $trip->departure_date
-            ? Carbon::parse($trip->departure_date)->startOfDay()
-            : null;
-        $spanDays = ($oldArrival && $oldDeparture)
-            ? max(1, (int) $oldArrival->diffInDays($oldDeparture))
-            : 30;
+        $spanDays = BundleValidity::DAYS;
 
         $arrival = Carbon::parse($iso)->startOfDay();
         $trip->arrival_date = $arrival->toDateString();
         $trip->departure_date = $arrival->copy()->addDays($spanDays)->toDateString();
-        $trip->duration_days = $spanDays + 1;
+        $trip->duration_days = $spanDays;
         $trip->order_id = $order->id;
         $trip->save();
 
@@ -550,7 +540,6 @@ class SimAssignmentService
             if ($existing) {
                 $assignment = $this->esimOrderLink->linkAssignmentToOrder($existing, $order)
                     ->load(['esim', 'bundle', 'order', 'orderItem']);
-                $this->notifyActivationEmail($assignment);
 
                 return $assignment;
             }
@@ -570,7 +559,6 @@ class SimAssignmentService
             $assignment = $this->esimOrderLink->linkAssignmentToOrder($assignment, $order);
             $this->updateOrderSimMetadata($order, $assignment);
             $assignment = $assignment->load(['esim', 'bundle', 'order', 'orderItem']);
-            $this->notifyActivationEmail($assignment);
 
             return $assignment;
         });

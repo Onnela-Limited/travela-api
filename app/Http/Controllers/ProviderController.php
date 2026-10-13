@@ -9,6 +9,7 @@ use App\Models\CountryProvider;
 use App\Models\Bundle;
 use App\Models\BundleType;
 use App\Support\BundleVisibility;
+use App\Support\BundleValidity;
 use Illuminate\Http\Request;
 
 class ProviderController extends Controller
@@ -63,7 +64,7 @@ class ProviderController extends Controller
             'id'            => $b->id,
             'name'          => $b->name,
             'type'          => $b->type?->code,
-            'validity_days' => $b->validity_days,
+            'validity_days' => BundleValidity::DAYS,
             'data_mb'       => $b->data_mb,
             'voice_minutes' => $b->voice_minutes,
             'sms'           => $b->sms,

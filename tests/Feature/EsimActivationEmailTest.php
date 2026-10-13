@@ -41,7 +41,7 @@ class EsimActivationEmailTest extends TestCase
         $this->assertStringStartsWith('data:image/png;base64,', $dataUri);
     }
 
-    public function test_activation_email_is_sent_once_when_assignment_is_created(): void
+    public function test_activation_email_is_sent_once_after_successful_recharge(): void
     {
         Mail::fake();
 
@@ -77,6 +77,10 @@ class EsimActivationEmailTest extends TestCase
         $this->assertTrue($result['assigned'] ?? false);
         $assignment = $result['assignment'];
         $this->assertInstanceOf(UserEsim::class, $assignment);
+        $this->assertNull($assignment->fresh()->activation_email_sent_at);
+        Mail::assertNothingSent();
+        $order->update(['recharge_status' => 'success', 'recharge_completed_at' => now()]);
+        $this->assertTrue(app(EsimActivationEmailService::class)->sendIfEligible($assignment));
         $this->assertNotNull($assignment->fresh()->activation_email_sent_at);
 
         Mail::assertSent(EsimActivationQrMail::class, function (EsimActivationQrMail $mail) use ($user) {

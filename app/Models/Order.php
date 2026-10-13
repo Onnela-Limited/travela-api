@@ -58,6 +58,11 @@ class Order extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function userEsims(): HasMany
+    {
+        return $this->hasMany(UserEsim::class);
+    }
+
     /**
      * Get the trip associated with the order.
      */

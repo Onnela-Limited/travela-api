@@ -13,7 +13,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withSchedule(function (Schedule $schedule): void {
-        $schedule->command('esim:notify-assignment-due')->dailyAt('00:10');
+        $schedule->command('esim:activate-due')
+            ->timezone(\App\Support\ActivationSchedule::TIMEZONE)
+            ->everyMinute()
+            ->withoutOverlapping();
     })
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(prepend: [

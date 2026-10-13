@@ -82,6 +82,38 @@ Artisan::command('mail:test {email}', function () {
     return 0;
 })->purpose('Send a test verification email through the configured mailer');
 
+Artisan::command('esim:activate-due', function () {
+    $activation = app(\App\Services\Esim\ScheduledEsimActivationService::class);
+    $ready = 0;
+    \App\Models\Order::query()
+        ->where(function ($q) {
+            $q->where('payment_status', 'paid')->orWhere('status', 'paid');
+        })
+        ->whereHas('trip', function ($q) {
+            $q->whereDate('arrival_date', '<=', \App\Support\ActivationSchedule::today());
+        })
+        ->where(function ($q) {
+            $q->whereNull('recharge_status')->orWhere('recharge_status', '!=', 'success')
+                ->orWhereHas('userEsims', fn ($assignment) => $assignment->whereNull('activation_email_sent_at'));
+        })
+        ->with('trip')
+        ->chunkById(100, function ($orders) use ($activation, &$ready) {
+            foreach ($orders as $order) {
+                try {
+                    $result = $activation->activateOrder($order);
+                    if ($result['status'] === 'ready') $ready++;
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::error('Scheduled eSIM activation failed', [
+                        'order_id' => $order->id, 'error' => $e->getMessage(),
+                    ]);
+                    $this->error("Order {$order->id}: activation failed; will retry.");
+                }
+            }
+        });
+    $this->info("eSIM orders ready: {$ready}");
+    return 0;
+})->purpose('Assign and recharge due eSIM orders, then send installation QR emails');
+
 Artisan::command('esim:notify-assignment-due', function () {
     $assignment = app(\App\Services\Esim\SimAssignmentService::class);
     $sent = 0;
@@ -92,7 +124,7 @@ Artisan::command('esim:notify-assignment-due', function () {
             $q->where('payment_status', 'paid')->orWhere('status', 'paid');
         })
         ->whereHas('trip', function ($q) {
-            $q->whereDate('arrival_date', '<=', now()->toDateString());
+            $q->whereDate('arrival_date', '<=', \App\Support\ActivationSchedule::today());
         })
         ->orderBy('id')
         ->get();

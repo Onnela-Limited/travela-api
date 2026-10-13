@@ -275,15 +275,15 @@ class UserEsimController extends Controller
         if (! ($prompt['assigned'] ?? false)) {
             return response()->json([
                 'success' => false,
-                'status' => $prompt['reason'] === 'awaiting_confirmation'
-                    ? 'awaiting_confirmation'
+                'status' => $prompt['reason'] === 'activation_pending'
+                    ? 'activation_pending'
                     : ($prompt['reason'] === 'scheduled' ? 'scheduled' : 'payment_required'),
                 'has_sim' => false,
                 'poll_again' => false,
                 'activation_date' => $prompt['activation_date'] ?? null,
                 'order_id' => $prompt['order_id'] ?? $latestPaid->id,
-                'message' => ($prompt['reason'] ?? '') === 'awaiting_confirmation'
-                    ? 'Your eSIM activation date is here. Assign your SIM from the dashboard, or choose a later date.'
+                'message' => ($prompt['reason'] ?? '') === 'activation_pending'
+                    ? 'Your eSIM is being assigned and prepared automatically. No confirmation is needed.'
                     : 'Your eSIM activation date is still ahead.',
                 'latest_order' => $latestOrder,
                 'data' => null,
@@ -535,6 +535,9 @@ class UserEsimController extends Controller
     ): JsonResponse {
         $assignment->loadMissing(['esim', 'bundle.type', 'order', 'orderItem']);
 
+        $recharge ??= $this->fulfillLatestPaidOrder((int) $assignment->user_id);
+        app(\App\Services\Esim\EsimActivationEmailService::class)->sendIfEligible($assignment);
+
         return response()->json([
             'success' => true,
             'status' => $assignmentStatus,
@@ -543,7 +546,7 @@ class UserEsimController extends Controller
             'message' => $created ? 'SIM assigned successfully' : 'SIM already assigned',
             'data' => $assignment->toAssignmentArray(),
             'latest_order' => $this->esimOrderLink->latestOrderForUser((int) $assignment->user_id),
-            'recharge' => $recharge ?? $this->fulfillLatestPaidOrder((int) $assignment->user_id),
+            'recharge' => $recharge,
         ], $status);
     }
 

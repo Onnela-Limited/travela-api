@@ -98,6 +98,10 @@ class UserEsim extends Model
             $data['latest_order'] = $service->latestOrderForUser((int) $this->user_id);
         }
 
-        return array_merge($data, app(PhysicalSimIssuanceService::class)->issuancePayload($this));
+        return array_merge(
+            $data,
+            app(PhysicalSimIssuanceService::class)->issuancePayload($this),
+            $service->planWindowForAssignment($this),
+        );
     }
 }

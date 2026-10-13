@@ -6,6 +6,7 @@ use App\Models\Bundle;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\UserEsim;
+use App\Support\BundleValidity;
 
 class UserEsimOrderLinkService
 {
@@ -155,7 +156,7 @@ class UserEsimOrderLinkService
             $bundle->load('type');
         }
 
-        $durationDays = $item?->validity_days ?? $bundle?->validity_days;
+        $durationDays = BundleValidity::DAYS;
 
         return [
             'id' => $bundle?->id ?? $item?->bundle_id,
@@ -176,6 +177,35 @@ class UserEsimOrderLinkService
             'order_id' => $order?->id ?? $item?->order_id,
             'order_draft_id' => $order?->draft_id,
             'order_item_id' => $item?->id,
+        ];
+    }
+
+    /** The data validity window starts at confirmed recharge, not installation. */
+    public function planWindowForAssignment(UserEsim $assignment): array
+    {
+        $order = Order::query()
+            ->where('user_id', $assignment->user_id)
+            ->where('recharge_status', 'success')
+            ->whereNotNull('recharge_completed_at')
+            ->where(function ($query) use ($assignment) {
+                $query->where('metadata->recharge->user_esim_id', $assignment->id)
+                    ->orWhere('metadata->user_esim_id', $assignment->id);
+                if ($assignment->order_id) {
+                    $query->orWhere('id', $assignment->order_id);
+                }
+            })
+            ->orderByDesc('recharge_completed_at')
+            ->orderByDesc('id')
+            ->first();
+
+        $start = $order?->recharge_completed_at;
+        $end = $start?->copy()->addDays(BundleValidity::DAYS);
+
+        return [
+            'plan_validity_days' => BundleValidity::DAYS,
+            'plan_started_at' => $start?->toIso8601String(),
+            'plan_expires_at' => $end?->toIso8601String(),
+            'plan_expired' => $end ? now()->greaterThanOrEqualTo($end) : false,
         ];
     }
 

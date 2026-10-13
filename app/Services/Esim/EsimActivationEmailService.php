@@ -23,6 +23,10 @@ class EsimActivationEmailService
             return false;
         }
 
+        if ($assignment->order?->recharge_status !== 'success') {
+            return false;
+        }
+
         $esim = $assignment->esim;
         if (! $esim || $esim->sim_type !== Esim::SIM_TYPE_ESIM) {
             return false;
@@ -49,6 +53,7 @@ class EsimActivationEmailService
                 iccid: $esim->iccid,
                 orderReference: $orderReference,
                 dashboardUrl: $this->customerDashboardUrl(),
+                qrCodeData: $qrCodeData,
             ));
         } catch (Throwable $e) {
             Log::error('Failed to send eSIM activation welcome email', [

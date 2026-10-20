@@ -16,6 +16,10 @@ class ScheduledEsimActivationService
 
     public function activateOrder(Order $order): array
     {
+        if (! $order->user_id) {
+            return ['status' => 'missing_customer'];
+        }
+
         if (! $this->assignment->orderIsPaid($order)
             || OrderCheckout::isTopUpOrder($order)
             || $this->assignment->orderSimType($order) !== Esim::SIM_TYPE_ESIM

@@ -12,6 +12,7 @@ use App\Models\UserEsim;
 use App\Services\Esim\PhysicalSimIssuanceService;
 use App\Services\Esim\SimAssignmentService;
 use App\Services\EvPay\EvPayCheckoutService;
+use App\Services\OrderPricingService;
 use App\Support\BundleValidity;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -109,7 +110,7 @@ class OrderController extends Controller
      */
     public function storeOrder(StoreOrderRequest $request): JsonResponse
     {
-        $v = $request->validated();
+        $v = app(OrderPricingService::class)->price($request->validated(), $request->user());
 
         try {
             DB::beginTransaction();
@@ -117,6 +118,12 @@ class OrderController extends Controller
             $order = Order::where('draft_id', $v['draft_id'])
                 ->lockForUpdate()
                 ->first();
+
+            if ($order && ! $this->canAccessOrder($request, $order)) {
+                DB::rollBack();
+
+                return response()->json(['message' => 'This order does not belong to you.'], 403);
+            }
 
             $newStatus = 'pending_payment';
 
@@ -127,6 +134,7 @@ class OrderController extends Controller
                 'countryName' => $v['countryName'] ?? null,
                 'simType' => $v['simType'] ?? null,
                 'finalized_at' => now()->toIso8601String(),
+                'pricing_version' => 1,
             ]);
             foreach (['msisdn', 'esim_id', 'user_esim_id'] as $simKey) {
                 if (! empty($v[$simKey])) {
@@ -143,7 +151,7 @@ class OrderController extends Controller
                 ], fn ($x) => $x !== null && $x !== '');
             }
 
-            if ($order && $order->status !== 'draft') {
+            if ($order && ($order->status !== 'draft' || $order->payment_status === 'paid' || $order->payment_reference)) {
                 DB::commit();
                 $order->load(['trip', 'orderItems', 'user', 'kyc']);
 
@@ -254,7 +262,7 @@ class OrderController extends Controller
     /**
      * Display the specified order.
      */
-    public function show(string $draftId): JsonResponse
+    public function show(Request $request, string $draftId): JsonResponse
     {
         $order = Order::with(['trip', 'orderItems.bundle', 'user', 'kyc'])
             ->where('draft_id', $draftId)
@@ -265,6 +273,10 @@ class OrderController extends Controller
                 'success' => false,
                 'message' => 'Order not found',
             ], 404);
+        }
+
+        if (! $this->canAccessOrder($request, $order)) {
+            return response()->json(['message' => 'This order does not belong to you.'], 403);
         }
 
         return response()->json([
@@ -278,19 +290,31 @@ class OrderController extends Controller
      */
     public function update(StoreOrderRequest $request, string $draftId): JsonResponse
     {
+        $validated = app(OrderPricingService::class)->price($request->validated(), $request->user());
         try {
             DB::beginTransaction();
 
-            $order = Order::where('draft_id', $draftId)->first();
+            $order = Order::where('draft_id', $draftId)->lockForUpdate()->first();
 
             if (! $order) {
+                DB::rollBack();
                 return response()->json([
                     'success' => false,
                     'message' => 'Order not found',
                 ], 404);
             }
 
-            $validated = $request->validated();
+            if (! $this->canAccessOrder($request, $order)) {
+                DB::rollBack();
+
+                return response()->json(['message' => 'This order does not belong to you.'], 403);
+            }
+            if ($order->status !== 'draft' || $order->payment_status === 'paid' || $order->payment_reference) {
+                DB::rollBack();
+
+                return response()->json(['message' => 'Checkout orders cannot be modified. Create a new order.'], 409);
+            }
+            $validated['user_id'] = $order->user_id;
 
             // Update KYC record
             $this->createOrUpdateKyc($validated);
@@ -330,7 +354,7 @@ class OrderController extends Controller
     /**
      * Remove the specified order from storage.
      */
-    public function destroy(string $draftId): JsonResponse
+    public function destroy(Request $request, string $draftId): JsonResponse
     {
         try {
             $order = Order::where('draft_id', $draftId)->first();
@@ -340,6 +364,13 @@ class OrderController extends Controller
                     'success' => false,
                     'message' => 'Order not found',
                 ], 404);
+            }
+
+            if (! $this->canAccessOrder($request, $order)) {
+                return response()->json(['message' => 'This order does not belong to you.'], 403);
+            }
+            if ($order->status !== 'draft' || $order->payment_status === 'paid' || $order->payment_reference) {
+                return response()->json(['message' => 'Checkout orders cannot be deleted.'], 409);
             }
 
             $order->delete();
@@ -361,6 +392,13 @@ class OrderController extends Controller
     /**
      * Create or update KYC record
      */
+    private function canAccessOrder(Request $request, Order $order): bool
+    {
+        $user = $request->user();
+
+        return $user && ($user->isAdmin() || $user->isAgent() || (int) $order->user_id === (int) $user->id);
+    }
+
     private function createOrUpdateKyc(array $validated): Kyc
     {
         $kycData = $validated['kyc'];

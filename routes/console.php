@@ -86,6 +86,8 @@ Artisan::command('esim:activate-due', function () {
     $activation = app(\App\Services\Esim\ScheduledEsimActivationService::class);
     $ready = 0;
     \App\Models\Order::query()
+        ->whereNotNull('user_id')
+        ->whereHas('user')
         ->where(function ($q) {
             $q->where('payment_status', 'paid')->orWhere('status', 'paid');
         })

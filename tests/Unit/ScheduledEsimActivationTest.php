@@ -115,9 +115,20 @@ class ScheduledEsimActivationTest extends TestCase
         Mail::assertSentCount(1);
     }
 
+    public function test_orders_without_a_customer_do_not_assign_recharge_or_email(): void
+    {
+        [$service, $order, $assignment, $recharge, $email] = $this->fixture();
+        $order->user_id = null;
+        $assignment->shouldNotReceive('assignForPaidOrder');
+        $recharge->shouldNotReceive('rechargePaidOrder');
+        $email->shouldNotReceive('sendIfEligible');
+        $this->assertSame('missing_customer', $service->activateOrder($order)['status']);
+    }
+
     private function fixture(bool $paid = true, bool $due = true): array
     {
         $order = Mockery::mock(Order::class)->makePartial();
+        $order->user_id = 1;
         $order->metadata = ['simType' => 'esim'];
         $order->shouldReceive('refresh')->andReturnSelf();
         $assignment = Mockery::mock(SimAssignmentService::class);

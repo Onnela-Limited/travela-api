@@ -65,6 +65,10 @@ class EvPayCheckoutService
             throw new RuntimeException('This order is already paid.');
         }
 
+        if (data_get($order->metadata, 'pricing_version') !== 1) {
+            throw new RuntimeException('This order requires pricing review. Please create a new checkout.');
+        }
+
         $order = $this->prepare($order);
 
         $existingUrl = $this->storedPaymentUrl($order);
@@ -289,6 +293,12 @@ class EvPayCheckoutService
             }
 
             $this->assertWebhookMatchesOrder($order, $data, $strictMatch);
+
+            // Older orders contain browser-supplied prices. A valid gateway payment
+            // for those amounts is not proof that the catalog bundle was paid for.
+            if (data_get($order->metadata, 'pricing_version') !== 1) {
+                throw new EvPayWebhookException('This order requires manual pricing review before fulfillment.', 422);
+            }
 
             $transactionId = trim((string) ($data['id'] ?? ''));
             if ($transactionId !== '' && ! $order->gateway_payment_id) {

@@ -28,7 +28,7 @@ class EsimPlanValidityTest extends TestCase
             $table->rememberToken(); $table->timestamps();
         });
         Schema::create('orders', function (Blueprint $table) {
-            $table->id(); $table->unsignedBigInteger('user_id'); $table->string('draft_id');
+            $table->id(); $table->unsignedBigInteger('user_id')->nullable(); $table->string('draft_id');
             $table->string('status'); $table->string('payment_status');
             $table->decimal('subtotal'); $table->decimal('discount_amount'); $table->decimal('total_amount');
             $table->string('currency'); $table->json('metadata')->nullable();
@@ -113,7 +113,11 @@ class EsimPlanValidityTest extends TestCase
         $future = $this->order(['metadata' => ['simType' => 'esim']]);
         $unpaid = $this->order(['status' => 'pending', 'payment_status' => 'pending']);
         $finished = $this->order(['recharge_status' => 'success']);
-        foreach ([$due, $future, $unpaid, $finished] as $order) {
+        $orphan = $this->order([]);
+        $orphan->update(['user_id' => null]);
+        $missingUser = $this->order([]);
+        $missingUser->update(['user_id' => 999999]);
+        foreach ([$due, $future, $unpaid, $finished, $orphan, $missingUser] as $order) {
             Trip::create(['order_id' => $order->id, 'destination_country' => 'TZ',
                 'arrival_date' => $order->is($future) ? '2026-10-15' : '2026-10-14',
                 'departure_date' => '2026-11-14', 'duration_days' => 30]);

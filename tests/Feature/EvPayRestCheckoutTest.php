@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Models\Bundle;
 use App\Models\Order;
 use App\Models\User;
 use App\Services\Esim\SimAssignmentService;
 use App\Services\EvPay\EvPayCheckoutService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -504,6 +506,7 @@ class EvPayRestCheckoutTest extends TestCase
             'discount_amount' => 0,
             'total_amount' => $amount,
             'currency' => 'USD',
+            'metadata' => ['pricing_version' => 1],
         ]);
 
         return app(EvPayCheckoutService::class)->prepare($order);
@@ -515,6 +518,19 @@ class EvPayRestCheckoutTest extends TestCase
      */
     private function storeOrderPayload(User $customer, array $overrides = []): array
     {
+        $countryId = DB::table('countries')->insertGetId([
+            'name' => 'Tanzania', 'iso2' => 'TZ', 'iso3' => 'TZA', 'currency' => 'USD',
+        ]);
+        $providerId = DB::table('providers')->insertGetId(['name' => 'Test', 'slug' => 'test']);
+        $countryProviderId = DB::table('country_provider')->insertGetId([
+            'country_id' => $countryId, 'provider_id' => $providerId,
+        ]);
+        $typeId = \App\Models\BundleType::firstOrCreate(['code' => 'DATA'], ['name' => 'Data'])->id;
+        $bundle = Bundle::create([
+            'bundle_type_id' => $typeId, 'country_provider_id' => $countryProviderId,
+            'name' => 'Test plan', 'data_mb' => 1024, 'validity_days' => 30,
+            'price_usd' => 50, 'currency' => 'USD', 'active' => true,
+        ]);
         $payload = [
             'draft_id' => 'DRAFT-STORE-'.uniqid(),
             'user_id' => $customer->id,
@@ -527,7 +543,8 @@ class EvPayRestCheckoutTest extends TestCase
             ],
             'items' => [
                 [
-                    'type' => 'service',
+                    'type' => 'bundle',
+                    'bundle_id' => $bundle->id,
                     'bundle_name' => 'Test plan',
                     'data_amount' => 1024,
                     'validity_days' => 7,

@@ -93,6 +93,12 @@ class OrderRechargeTest extends TestCase
         $order->currency = 'USD';
         $order->total_amount = 50;
         $order->subtotal = 50;
+        $order->metadata = array_merge($order->metadata ?? [], [
+            'pricing_version' => 1,
+            'checkoutMode' => 'topup',
+            'simType' => 'esim',
+            'msisdn' => '255797053059',
+        ]);
         $order->save();
 
         $this->mockBalanceRefresh();
@@ -100,7 +106,9 @@ class OrderRechargeTest extends TestCase
             $mock->shouldReceive('post')
                 ->once()
                 ->with('/api/recharge', [], \Mockery::type('array'), \Mockery::any())
-                ->andReturn(Http::response(['status' => 'SUCCESS', 'transaction_id' => 'tx-1'], 200));
+                ->andReturn(new \Illuminate\Http\Client\Response(
+                    Http::response(['status' => 'SUCCESS', 'transaction_id' => 'tx-1'], 200)->wait()
+                ));
         });
 
         $t = (string) time();
@@ -258,7 +266,7 @@ class OrderRechargeTest extends TestCase
     {
         $user = User::factory()->create();
 
-        $bundleType = BundleType::create(['code' => 'DATA', 'name' => 'Data only']);
+        $bundleType = BundleType::firstOrCreate(['code' => 'DATA'], ['name' => 'Data only']);
         $country = Country::create(['name' => 'Tanzania', 'iso2' => 'TZ', 'iso3' => 'TZA']);
         $provider = Provider::create(['name' => 'Vodacom', 'slug' => 'vodacom']);
         $pivot = CountryProvider::create([

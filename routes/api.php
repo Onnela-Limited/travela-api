@@ -188,3 +188,5 @@ Route::middleware(['auth:sanctum', 'verified'])->group(function () {
 
 // Authenticated user info (no email verification required)
 Route::middleware('auth:sanctum')->get('/me', [AuthController::class, 'me']);
+
+require __DIR__.'/partners.php';

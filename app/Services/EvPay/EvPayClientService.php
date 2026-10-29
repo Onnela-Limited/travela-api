@@ -2,6 +2,7 @@
 
 namespace App\Services\EvPay;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -56,8 +57,6 @@ class EvPayClientService
         array $payload,
         ?string $idempotencyKey = null
     ): array {
-        $token = $this->getAccessToken();
-
         /*
          * We sign this exact JSON text and send the same text to EvPay.
          * Do not sign one JSON string and then let Laravel recreate it.
@@ -67,25 +66,7 @@ class EvPayClientService
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
         );
 
-        $timestamp = (string) floor(microtime(true) * 1000);
-        $signature = $this->generateSignature($timestamp, $rawBody);
-
-        $headers = [
-            'X-Timestamp' => $timestamp,
-            'X-Signature' => $signature,
-        ];
-
-        if ($idempotencyKey !== null) {
-            $headers['Idempotency-Key'] = $idempotencyKey;
-        }
-
-        $response = Http::baseUrl($this->baseUrl())
-            ->withToken($token)
-            ->acceptJson()
-            ->timeout(30)
-            ->withHeaders($headers)
-            ->withBody($rawBody, 'application/json')
-            ->post('/api/v1/payment/card');
+        $response = $this->authenticatedRequest('POST', '/api/v1/payment/card', $rawBody, $idempotencyKey);
 
         if (! $response->successful()) {
             throw new RuntimeException(
@@ -112,20 +93,7 @@ class EvPayClientService
             throw new RuntimeException('EvPay payment id is missing.');
         }
 
-        $token = $this->getAccessToken();
-        $rawBody = '';
-        $timestamp = (string) floor(microtime(true) * 1000);
-        $signature = $this->generateSignature($timestamp, $rawBody);
-
-        $response = Http::baseUrl($this->baseUrl())
-            ->withToken($token)
-            ->acceptJson()
-            ->timeout(15)
-            ->withHeaders([
-                'X-Timestamp' => $timestamp,
-                'X-Signature' => $signature,
-            ])
-            ->get('/api/v1/payment/'.rawurlencode($id));
+        $response = $this->authenticatedRequest('GET', '/api/v1/payment/'.rawurlencode($id));
 
         if (! $response->successful()) {
             throw new RuntimeException(
@@ -138,6 +106,45 @@ class EvPayClientService
         $json = $response->json();
 
         return is_array($json) ? $json : [];
+    }
+
+    private function authenticatedRequest(
+        string $method,
+        string $path,
+        string $rawBody = '',
+        ?string $idempotencyKey = null,
+    ): Response {
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $token = $this->getAccessToken();
+            $timestamp = (string) floor(microtime(true) * 1000);
+            $headers = [
+                'X-Timestamp' => $timestamp,
+                'X-Signature' => $this->generateSignature($timestamp, $rawBody),
+            ];
+            if ($idempotencyKey !== null) {
+                $headers['Idempotency-Key'] = $idempotencyKey;
+            }
+
+            $request = Http::baseUrl($this->baseUrl())
+                ->withToken($token)
+                ->acceptJson()
+                ->timeout($method === 'POST' ? 30 : 15)
+                ->withHeaders($headers);
+
+            $response = $method === 'POST'
+                ? $request->withBody($rawBody, 'application/json')->post($path)
+                : $request->get($path);
+
+            if ($response->status() !== 401) {
+                return $response;
+            }
+
+            // A cached token can be revoked before its advertised expiry. Refresh
+            // once, retaining the exact body and idempotency key on payment retry.
+            Cache::forget(self::ACCESS_TOKEN_CACHE_KEY);
+        }
+
+        return $response;
     }
 
     /**

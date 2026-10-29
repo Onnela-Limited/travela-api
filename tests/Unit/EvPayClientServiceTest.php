@@ -118,6 +118,84 @@ class EvPayClientServiceTest extends TestCase
         app(EvPayClientService::class)->createCardPayment(['amount' => '1']);
     }
 
+    public function test_card_payment_refreshes_rejected_token_and_preserves_payment_request(): void
+    {
+        Cache::put('evpay_access_token', 'expired-token', 60);
+        Http::fake([
+            '*/api/auth/v1' => Http::response(['data' => ['accessToken' => 'fresh-token', 'expiresIn' => 3600]]),
+            '*/api/v1/payment/card' => Http::sequence()
+                ->push(['message' => 'Unauthorized'], 401)
+                ->push(['data' => ['paymentUrl' => 'https://pay.test/checkout']], 200),
+        ]);
+
+        $payload = ['amount' => '20.00', 'currency' => 'USD', 'reference' => 'ORD-227'];
+        $result = app(EvPayClientService::class)->createCardPayment($payload, 'ORD-227');
+
+        $this->assertSame('https://pay.test/checkout', $result['data']['paymentUrl']);
+        Http::assertSentCount(3);
+        $payments = Http::recorded(fn ($request) => str_ends_with($request->url(), '/payment/card'))->values();
+        $this->assertCount(2, $payments);
+        $this->assertTrue($payments[0][0]->hasHeader('Authorization', 'Bearer expired-token'));
+        $this->assertTrue($payments[1][0]->hasHeader('Authorization', 'Bearer fresh-token'));
+        foreach ($payments as [$request]) {
+            $this->assertSame(json_encode($payload), $request->body());
+            $this->assertTrue($request->hasHeader('Idempotency-Key', 'ORD-227'));
+            $this->assertSame(
+                hash_hmac('sha256', $request->header('X-Timestamp')[0].'.'.$request->body(), 'test-signing-key'),
+                $request->header('X-Signature')[0],
+            );
+        }
+        $this->assertSame('fresh-token', Cache::get('evpay_access_token'));
+    }
+
+    public function test_card_payment_stops_after_one_refresh_when_unauthorized_persists(): void
+    {
+        Cache::put('evpay_access_token', 'expired-token', 60);
+        Http::fake([
+            '*/api/auth/v1' => Http::response(['data' => ['accessToken' => 'fresh-token']]),
+            '*/api/v1/payment/card' => Http::response(['message' => 'Unauthorized'], 401),
+        ]);
+
+        try {
+            app(EvPayClientService::class)->createCardPayment(['amount' => '20'], 'ORD-227');
+            $this->fail('A second 401 must remain an error.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('EvPay card payment failed with HTTP 401: Unauthorized', $e->getMessage());
+        }
+        Http::assertSentCount(3);
+        $this->assertNull(Cache::get('evpay_access_token'));
+    }
+
+    public function test_card_payment_does_not_retry_other_errors(): void
+    {
+        Cache::put('evpay_access_token', 'valid-token', 60);
+        Http::fake(['*/api/v1/payment/card' => Http::response(['message' => 'Invalid payment'], 422)]);
+
+        try {
+            app(EvPayClientService::class)->createCardPayment(['amount' => '20']);
+            $this->fail('A validation error must remain an error.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('EvPay card payment failed with HTTP 422: Invalid payment', $e->getMessage());
+        }
+        Http::assertSentCount(1);
+    }
+
+    public function test_get_payment_refreshes_rejected_token(): void
+    {
+        Cache::put('evpay_access_token', 'expired-token', 60);
+        Http::fake([
+            '*/api/auth/v1' => Http::response(['data' => ['accessToken' => 'fresh-token']]),
+            '*/api/v1/payment/pay-1' => Http::sequence()
+                ->push(['message' => 'Unauthorized'], 401)
+                ->push(['status' => 'SUCCESS'], 200),
+        ]);
+
+        $this->assertSame('SUCCESS', app(EvPayClientService::class)->getPayment('pay-1')['status']);
+        Http::assertSentCount(3);
+        Http::assertSent(fn ($request) => $request->method() === 'GET'
+            && $request->hasHeader('Authorization', 'Bearer fresh-token'));
+    }
+
     public function test_get_payment_signs_get_request(): void
     {
         Cache::put('evpay_access_token', 'tok-abc', 60);

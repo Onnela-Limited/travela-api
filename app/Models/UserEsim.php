@@ -8,6 +8,19 @@ use Illuminate\Database\Eloquent\Model;
 
 class UserEsim extends Model
 {
+    // Only the partner stock service sets this after locking and checking ownership.
+    public bool $partnerStockAssignment = false;
+
+    protected static function booted(): void
+    {
+        static::creating(function (self $assignment) {
+            $esim = Esim::find($assignment->esim_id);
+            if ($esim?->partner_bulk_order_id && ! $assignment->partnerStockAssignment) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['esim_id' => 'This SIM is reserved for a partner bulk order.']);
+            }
+        });
+    }
+
     protected $fillable = [
         'user_id',
         'esim_id',

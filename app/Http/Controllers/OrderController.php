@@ -201,6 +201,15 @@ class OrderController extends Controller
                 'metadata' => $meta,
             ];
 
+            if (! $order || ! $order->partner_referral_id) {
+                $referral = app(\App\Services\PartnerReferralService::class)->forCheckout($v['referral_code'] ?? null, $request->user());
+                if ($referral) {
+                    $orderPayload['partner_referral_id'] = $referral->id;
+                    $orderPayload['referral_code'] = $referral->code;
+                    $orderPayload['partner_commission_bps'] = app(\App\Services\PartnerSalesService::class)->rate($referral->application);
+                }
+            }
+
             if ($order && $order->payment_status === 'paid') {
                 $orderPayload['status'] = 'paid';
                 $orderPayload['payment_status'] = 'paid';
@@ -248,6 +257,9 @@ class OrderController extends Controller
                     'sim_assignment' => $this->simAssignment->assignmentSummary($assignResult),
                 ],
             ], 201);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Throwable $e) {
             DB::rollBack();
 

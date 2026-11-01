@@ -20,6 +20,7 @@ class StoreOrderRequest extends FormRequest
     {
         return [
             'draft_id' => ['required', 'string', 'max:80'],
+            'referral_code' => ['nullable', 'string', 'max:20', 'regex:/^TRV-[A-Z0-9]{8}$/i'],
             'user_id' => ['required', 'integer', 'exists:users,id'],
 
             'checkoutMode' => ['nullable', 'string', 'max:40'],

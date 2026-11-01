@@ -24,6 +24,7 @@ trait CreatesVodacomTestSchema
         });
 
         Schema::create('esims', function (Blueprint $table) {
+            $table->unsignedBigInteger('partner_bulk_order_id')->nullable();
             $table->id();
             $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
             $table->unsignedBigInteger('sim_id')->nullable();

@@ -81,6 +81,8 @@ class PartnerApplicationReviewController extends Controller
                 'status' => $data['decision'], 'review_message' => $message ?: null,
                 'reviewed_at' => now(), 'review_version' => $current->review_version + 1,
             ]);
+            if ($current->status === 'approved') app(\App\Services\PartnerReferralService::class)->ensureFor($current);
+            app(\App\Services\PartnerNotificationService::class)->record($current,'application:'.$current->id.':'.$current->review_version,'application','Application reviewed','Application '.$current->reference.' is now '.str_replace('_',' ',$current->status).'. Open your status page for details.','/status');
             return $current;
         });
 

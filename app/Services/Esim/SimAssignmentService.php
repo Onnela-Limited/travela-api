@@ -52,6 +52,11 @@ class SimAssignmentService
      */
     public function fulfillPaidOrder(Order $order, ?array $evpayContext = null): array
     {
+        $bulkInvoiceId = data_get($order->metadata,'partner_bulk_invoice_id');
+        if ($bulkInvoiceId && \App\Models\PartnerBulkOrder::whereKey($bulkInvoiceId)->where('payment_order_id',$order->id)->exists()) {
+            app(\App\Services\PartnerBulkPaymentService::class)->sync(\App\Models\PartnerBulkOrder::findOrFail($bulkInvoiceId));
+            return ['assigned'=>false,'sim_type'=>null,'reason'=>'partner_bulk_invoice'];
+        }
         if (OrderCheckout::isTopUpOrder($order)) {
             return $this->fulfillTopUpPaidOrder($order, $evpayContext);
         }
@@ -584,6 +589,7 @@ class SimAssignmentService
             ->whereNotNull('msisdn')
             ->where('msisdn', '!=', '')
             ->where('provider_status', Esim::PROVIDER_STATUS_ACTIVE)
+            ->whereNull('partner_bulk_order_id')
             ->whereNotIn('id', UserEsim::query()->select('esim_id'))
             ->orderBy('id');
     }

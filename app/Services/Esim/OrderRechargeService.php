@@ -721,12 +721,14 @@ class OrderRechargeService
             return null;
         }
 
-        $assignment = UserEsim::create([
-            'user_id' => $userId,
-            'esim_id' => $esim->id,
-        ]);
-
-        $esim->update(['status' => 'MANAGED']);
+        $assignment = DB::transaction(function () use ($esim, $userId) {
+            $locked = Esim::whereKey($esim->id)->lockForUpdate()->firstOrFail();
+            if ($locked->partner_bulk_order_id || UserEsim::where('esim_id', $locked->id)->exists()) return null;
+            $assignment = UserEsim::create(['user_id' => $userId, 'esim_id' => $locked->id]);
+            $locked->update(['status' => 'MANAGED']);
+            return $assignment;
+        });
+        if (! $assignment) return null;
 
         if ($order) {
             return $this->esimOrderLink->linkAssignmentToOrder($assignment, $order);

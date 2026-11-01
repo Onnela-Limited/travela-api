@@ -20,6 +20,16 @@ class AuthenticatePartnerSession
         if (! $application) {
             return response()->json(['message' => 'Unauthenticated.'], 401)->header('Cache-Control', 'no-store');
         }
+        $member=null;
+        if ($session->partner_team_member_id ?? null) {
+            $member=\App\Models\PartnerTeamMember::find($session->partner_team_member_id);
+            if (!$member || $member->partner_application_id!=$application->id || $member->status!=='active' || !$member->active_email_hash
+                || !in_array($member->role,['manager','front_desk'],true) || !app(\App\Services\PartnerTeamService::class)->business($application)) {
+                return response()->json(['message'=>'Unauthenticated.'],401)->header('Cache-Control','no-store');
+            }
+        }
+        $request->attributes->set('partner_role',$member?->role ?? 'owner');
+        $request->attributes->set('partner_team_member',$member);
         $request->attributes->set('partner_application', $application);
         $request->attributes->set('partner_session_id', $session->id);
 

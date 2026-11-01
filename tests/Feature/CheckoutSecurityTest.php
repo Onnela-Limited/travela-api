@@ -90,6 +90,12 @@ class CheckoutSecurityTest extends TestCase
             $t->date('departure_date');
             $t->timestamps();
         });
+        (require database_path('migrations/2026_10_25_000001_create_partner_applications_table.php'))->up();
+        (require database_path('migrations/2026_10_26_000001_add_partner_authentication.php'))->up();
+        (require database_path('migrations/2026_10_26_000002_add_partner_application_reviews.php'))->up();
+        (require database_path('migrations/2026_10_29_000001_create_partner_referrals.php'))->up();
+        (require database_path('migrations/2026_10_29_000002_add_partner_referrals_to_orders.php'))->up();
+        (require database_path('migrations/2026_10_31_000001_add_partner_commission_to_orders.php'))->up();
         $this->customer = User::factory()->create(['role' => 'user']);
         Sanctum::actingAs($this->customer);
         $this->bundle = Bundle::create(['name' => '50GB (30 days)', 'price_usd' => 50,
@@ -167,6 +173,64 @@ class CheckoutSecurityTest extends TestCase
         });
         $this->postJson('/api/payments/evpay/callback')->assertUnprocessable();
         $this->assertSame('pending', $order->fresh()->payment_status);
+    }
+
+    public function test_referral_is_recorded_but_never_changes_catalog_pricing(): void
+    {
+        $partner = $this->referralPartner();
+        $referral = app(\App\Services\PartnerReferralService::class)->ensureFor($partner);
+        $payload = $this->payload();
+        $payload['referral_code'] = strtolower($referral->code);
+        $payload['partner_referral_id'] = 999999;
+        $payload['partner_commission_bps'] = 9999;
+        $this->mock(EvPayCheckoutService::class, fn ($mock) => $mock->shouldReceive('startCardPayment')->once()->andReturn(['checkout_url' => 'https://payments.example/test']));
+        $this->postJson('/api/orders', $payload)->assertCreated();
+        $order = Order::sole();
+        $this->assertSame($referral->id, $order->partner_referral_id);
+        $this->assertSame($referral->code, $order->referral_code);
+        $this->assertSame(1000, $order->partner_commission_bps);
+        $this->assertSame('50.00', $order->total_amount);
+        $this->assertSame('0.00', $order->discount_amount);
+    }
+
+    public function test_invalid_inactive_and_self_referrals_do_not_create_orders(): void
+    {
+        $payload = $this->payload();
+        $payload['referral_code'] = 'TRV-XXXXXXXX';
+        $this->postJson('/api/orders', $payload)->assertUnprocessable()->assertJsonValidationErrors('referral_code');
+        $partner = $this->referralPartner();
+        $referral = app(\App\Services\PartnerReferralService::class)->ensureFor($partner);
+        $payload['referral_code'] = $referral->code;
+        $partner->update(['status' => 'suspended']);
+        $this->postJson('/api/orders', $payload)->assertUnprocessable();
+        $partner->update(['status' => 'approved', 'email_hash' => \App\Support\PartnerIdentity::emailHash($this->customer->email)]);
+        $this->postJson('/api/orders', $payload)->assertUnprocessable();
+        $this->assertSame(0, Order::count());
+    }
+
+    public function test_order_retry_cannot_change_its_referral(): void
+    {
+        $first = app(\App\Services\PartnerReferralService::class)->ensureFor($this->referralPartner());
+        $second = app(\App\Services\PartnerReferralService::class)->ensureFor($this->referralPartner());
+        $payload = $this->payload();
+        $payload['referral_code'] = $first->code;
+        $this->mock(EvPayCheckoutService::class, fn ($mock) => $mock->shouldReceive('startCardPayment')->twice()->andReturn(['checkout_url' => 'https://payments.example/test']));
+        $this->postJson('/api/orders', $payload)->assertCreated();
+        config(['partners.commission_bps.content_creator' => 2000]);
+        $payload['referral_code'] = $second->code;
+        $this->postJson('/api/orders', $payload)->assertOk();
+        $this->assertSame(1, Order::count());
+        $this->assertSame($first->id, Order::sole()->partner_referral_id);
+        $this->assertSame(1000, Order::sole()->partner_commission_bps);
+    }
+
+    private function referralPartner(): \App\Models\PartnerApplication
+    {
+        return \App\Models\PartnerApplication::create([
+            'submission_key' => (string) \Illuminate\Support\Str::uuid(), 'reference' => 'TP-2026-'.\Illuminate\Support\Str::uuid(),
+            'status' => 'approved', 'email_hash' => \App\Support\PartnerIdentity::emailHash('referrer@example.test'),
+            'application_payload' => ['type' => 'content_creator', 'profile' => ['email' => 'referrer@example.test']], 'documents' => [], 'submitted_at' => now(),
+        ]);
     }
 
     private function order(int $userId): Order

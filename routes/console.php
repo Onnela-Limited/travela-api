@@ -154,3 +154,5 @@ Artisan::command('esim:notify-assignment-due', function () {
 
     return 0;
 })->purpose('Email customers when their eSIM activation date is due and no number is assigned');
+
+Artisan::command('partners:send-notifications', function(){ $sent=app(\App\Services\PartnerNotificationService::class)->retry();$this->info("Partner update emails sent: {$sent}");return 0;})->purpose('Retry pending partner update emails (maximum five attempts)');

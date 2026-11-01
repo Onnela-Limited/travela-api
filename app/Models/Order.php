@@ -11,6 +11,9 @@ class Order extends Model
 {
     protected $fillable = [
         'draft_id',
+        'partner_referral_id',
+        'partner_commission_bps',
+        'referral_code',
         'user_id',
         'status',
         'subtotal',
@@ -37,6 +40,8 @@ class Order extends Model
     ];
 
     protected $casts = [
+        'partner_referral_id' => 'integer',
+        'partner_commission_bps' => 'integer',
         'subtotal' => 'decimal:2',
         'discount_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',

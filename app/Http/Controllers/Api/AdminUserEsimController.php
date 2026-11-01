@@ -74,12 +74,13 @@ class AdminUserEsimController extends Controller
         }
 
         // Assignment: cannot reuse an esim_id (unique constraint)
-        $assignment = UserEsim::create([
-            'user_id' => $data['user_id'],
-            'esim_id' => $esimId,
-            'bundle_id' => $data['bundle_id'] ?? null,
-            'order_id' => $data['order_id'] ?? null,
-        ]);
+        $assignment = \Illuminate\Support\Facades\DB::transaction(function () use ($data, $esimId) {
+            Esim::whereKey($esimId)->lockForUpdate()->firstOrFail();
+            return UserEsim::create([
+                'user_id' => $data['user_id'], 'esim_id' => $esimId,
+                'bundle_id' => $data['bundle_id'] ?? null, 'order_id' => $data['order_id'] ?? null,
+            ]);
+        });
 
         // Mark inventory as managed
         Esim::where('id', $esimId)->update(['status' => 'MANAGED']);

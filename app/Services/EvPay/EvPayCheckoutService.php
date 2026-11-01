@@ -472,7 +472,7 @@ class EvPayCheckoutService
                 'amount' => $amount,
                 'currency' => self::CHARGE_CURRENCY,
                 'redirectUrl' => $this->customerReturnUrl($order),
-                'cancelUrl' => rtrim((string) config('services.evpay.cancel_url'), '/'),
+                'cancelUrl' => data_get($order->metadata,'partner_bulk_invoice_id') ? app(\App\Services\PartnerBulkPaymentService::class)->returnUrl($order,'cancelled') : rtrim((string) config('services.evpay.cancel_url'), '/'),
             ],
             'customer' => [
                 'firstname' => $firstName,
@@ -518,6 +518,7 @@ class EvPayCheckoutService
      */
     private function customerReturnUrl(Order $order): string
     {
+        if (data_get($order->metadata,'partner_bulk_invoice_id')) return app(\App\Services\PartnerBulkPaymentService::class)->returnUrl($order,'return');
         $base = rtrim((string) config('services.evpay.redirect_url'), '/');
         $query = ['await_balance' => '1'];
 

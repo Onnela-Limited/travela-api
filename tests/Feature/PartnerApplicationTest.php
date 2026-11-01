@@ -20,6 +20,7 @@ class PartnerApplicationTest extends TestCase
         (require database_path('migrations/2026_10_25_000001_create_partner_applications_table.php'))->up();
         (require database_path('migrations/2026_10_26_000001_add_partner_authentication.php'))->up();
         (require database_path('migrations/2026_10_26_000002_add_partner_application_reviews.php'))->up();
+        (require database_path('migrations/2026_10_29_000001_create_partner_referrals.php'))->up();
         Storage::fake('local');
     }
 

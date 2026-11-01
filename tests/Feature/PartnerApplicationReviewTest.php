@@ -28,6 +28,10 @@ class PartnerApplicationReviewTest extends TestCase
         (require database_path('migrations/2026_10_25_000001_create_partner_applications_table.php'))->up();
         (require database_path('migrations/2026_10_26_000001_add_partner_authentication.php'))->up();
         (require database_path('migrations/2026_10_26_000002_add_partner_application_reviews.php'))->up();
+        (require database_path('migrations/2026_10_29_000001_create_partner_referrals.php'))->up();
+        (require database_path('migrations/2026_11_01_000001_create_partner_teams.php'))->up();
+        (require database_path('migrations/2026_11_01_000003_create_partner_notifications.php'))->up();
+        \Illuminate\Support\Facades\Mail::fake();
         Storage::fake('local');
     }
 
@@ -126,6 +130,7 @@ class PartnerApplicationReviewTest extends TestCase
         $this->review($application, 'info_requested', 0, 'Please confirm your details.')->assertOk();
         $this->review($application, 'approved', 1)->assertOk()->assertJsonPath('application.status', 'approved')
             ->assertJsonCount(2, 'application.history')->assertJsonPath('application.reviewMessage', null);
+        $this->assertSame(1, \App\Models\PartnerReferral::where('partner_application_id', $application->id)->count());
         $token = Str::random(64);
         DB::table('partner_sessions')->insert(['partner_application_id' => $application->id, 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addHour(), 'created_at' => now(), 'updated_at' => now()]);
         $this->withToken($token)->getJson('/api/partner-auth/me')->assertOk()->assertJsonPath('partner.status', 'approved')->assertJsonPath('partner.reviewMessage', null);
@@ -139,6 +144,7 @@ class PartnerApplicationReviewTest extends TestCase
         $this->review($application, 'info_requested', 0, '   ')->assertUnprocessable();
         $this->review($application, 'rejected', 0, 'Registration could not be verified.')->assertOk();
         $this->assertSame('rejected', $application->fresh()->status);
+        $this->assertSame(0, \App\Models\PartnerReferral::count());
         $this->assertSame(1, PartnerApplicationReview::count());
     }
 
@@ -183,6 +189,13 @@ class PartnerApplicationReviewTest extends TestCase
             $this->assertSame('under_review', $application->fresh()->status);
             $this->assertSame(0, $application->fresh()->review_version);
         } finally { PartnerApplicationReview::flushEventListeners(); }
+    }
+
+    public function test_review_decision_creates_private_owner_update_without_private_notes(): void
+    {
+        $this->admin();$application=$this->application();$this->review($application,'info_requested',0,'PRIVATE-NOTE')->assertOk();
+        $row=DB::table('partner_notifications')->sole();$summary=app(\App\Services\PartnerNotificationService::class)->summary($row);
+        $this->assertSame('application',$row->category);$this->assertSame('/status',$summary['path']);$this->assertStringNotContainsString('PRIVATE-NOTE',$summary['body']);
     }
 
     private function admin(): User

@@ -138,6 +138,7 @@ class Esim extends Model
     {
         return $query
             ->where('status', 'AVAILABLE')
+            ->whereNull('partner_bulk_order_id')
             ->where(function (Builder $q) {
                 $q->whereNull('sale_status')
                     ->orWhere('sale_status', self::SALE_STATUS_AVAILABLE);

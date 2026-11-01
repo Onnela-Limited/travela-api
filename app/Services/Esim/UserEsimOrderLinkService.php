@@ -66,6 +66,7 @@ class UserEsimOrderLinkService
     {
         return Order::query()
             ->where('user_id', $userId)
+            ->whereNull('metadata->partner_bulk_invoice_id')
             ->where(function ($q) {
                 $q->where('payment_status', 'paid')
                     ->orWhere('status', 'paid');

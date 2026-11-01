@@ -13,6 +13,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withSchedule(function (Schedule $schedule): void {
+        $schedule->command('partners:send-notifications')->everyMinute()->withoutOverlapping();
         $schedule->command('esim:activate-due')
             ->timezone(\App\Support\ActivationSchedule::TIMEZONE)
             ->everyMinute()

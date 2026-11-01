@@ -72,6 +72,7 @@ class SimInventoryService
             ->leftJoin('user_esims', 'user_esims.esim_id', '=', 'esims.id')
             ->where('esims.provider_status', Esim::PROVIDER_STATUS_ACTIVE)
             ->whereNull('user_esims.id')
+            ->whereNull('esims.partner_bulk_order_id')
             ->count('esims.id');
 
         $assigned = (int) (clone $base)
@@ -118,6 +119,7 @@ class SimInventoryService
             ->leftJoin('user_esims', 'user_esims.esim_id', '=', 'esims.id')
             ->where('esims.provider_status', Esim::PROVIDER_STATUS_ACTIVE)
             ->whereNull('user_esims.id')
+            ->whereNull('esims.partner_bulk_order_id')
             ->count('esims.id');
 
         $assigned = (int) (clone $base)

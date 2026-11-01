@@ -6,13 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\UserEsim;
 use App\Services\Esim\EsimActivationEmailService;
+use App\Services\Esim\OrderEmailPreparationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class OrderEmailController extends Controller
 {
-    public function show(Order $order, EsimActivationEmailService $service)
+    public function show(Order $order, EsimActivationEmailService $service, OrderEmailPreparationService $preparation)
     {
         $assignments = UserEsim::with(['esim', 'user', 'order'])->where('order_id', $order->id)->get();
         $attempts = DB::table('esim_email_attempts')->where('order_id', $order->id)->latest('id')->limit(30)->get();
@@ -37,9 +38,12 @@ class OrderEmailController extends Controller
                 $warning = 'Delivery status could not be refreshed. Try again later.';
             }
         }
+        $prepareReason = $preparation->unavailableReason($order);
         return response()->json(['success' => true, 'data' => [
+            'can_prepare' => $prepareReason === null,
+            'prepare_reason' => $prepareReason,
             'assignments' => $assignments->map(fn ($a) => [
-                'id' => $a->id, 'iccid' => $a->esim?->iccid,
+                'id' => $a->id, 'iccid' => $a->esim?->iccid, 'msisdn' => $a->esim?->msisdn,
                 'recipient' => $a->user?->email,
                 'can_resend' => $service->ineligibleReason($a) === null,
                 'reason' => $service->ineligibleReason($a),
@@ -61,5 +65,10 @@ class OrderEmailController extends Controller
         abort_unless($service->resend($assignment, $request->user()->id), 502,
             'The email could not be confirmed as sent. Check email delivery status before trying again.');
         return response()->json(['success' => true, 'message' => 'Email submitted. Check delivery status to confirm delivery.']);
+    }
+
+    public function prepare(Request $request, Order $order, OrderEmailPreparationService $preparation)
+    {
+        return response()->json(['success' => true, 'data' => $preparation->prepareAndSend($order, $request->user()->id)]);
     }
 }

@@ -132,7 +132,7 @@ class SimAssignmentService
      *     recharge?: array<string, mixed>|null
      * }
      */
-    public function assignForPaidOrder(Order $order): array
+    public function assignForPaidOrder(Order $order, bool $requireQrCode = false): array
     {
         $order->refresh();
 
@@ -172,7 +172,7 @@ class SimAssignmentService
         }
 
         try {
-            $assignment = $this->assignEsimFromInventory($order);
+            $assignment = $this->assignEsimFromInventory($order, $requireQrCode);
         } catch (\Throwable $e) {
             Log::warning('eSIM auto-assign failed after payment', [
                 'order_id' => $order->id,
@@ -530,13 +530,15 @@ class SimAssignmentService
         return $summary;
     }
 
-    private function assignEsimFromInventory(Order $order): UserEsim
+    private function assignEsimFromInventory(Order $order, bool $requireQrCode = false): UserEsim
     {
         if (! $order->user_id) {
             throw new \RuntimeException('Order has no user_id.');
         }
 
-        return DB::transaction(function () use ($order) {
+        return DB::transaction(function () use ($order, $requireQrCode) {
+            // Serialize assignment even when this customer's first SIM row does not exist yet.
+            \App\Models\User::whereKey($order->user_id)->lockForUpdate()->firstOrFail();
             $existing = UserEsim::query()
                 ->where('user_id', $order->user_id)
                 ->lockForUpdate()
@@ -549,7 +551,11 @@ class SimAssignmentService
                 return $assignment;
             }
 
-            $esim = $this->nextAvailableQuery(Esim::SIM_TYPE_ESIM)->lockForUpdate()->first();
+            $query = $this->nextAvailableQuery(Esim::SIM_TYPE_ESIM);
+            if ($requireQrCode) {
+                $query->whereNotNull('network_id')->whereNotNull('qr_code_data')->whereRaw("TRIM(qr_code_data) <> ''");
+            }
+            $esim = $query->lockForUpdate()->first();
             if (! $esim || UserEsim::where('esim_id', $esim->id)->exists()) {
                 throw new \RuntimeException('No available eSIM inventory.');
             }

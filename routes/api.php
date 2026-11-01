@@ -127,6 +127,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Orders (admin)
     Route::get('/orders', [OrderController::class, 'getOrders']);
     Route::get('/orders/{order}/email', [\App\Http\Controllers\Api\Admin\OrderEmailController::class, 'show'])->middleware('throttle:30,1');
+    Route::post('/orders/{order}/email/prepare', [\App\Http\Controllers\Api\Admin\OrderEmailController::class, 'prepare'])->middleware('throttle:10,1');
     Route::post('/orders/{order}/email/resend', [\App\Http\Controllers\Api\Admin\OrderEmailController::class, 'resend'])->middleware('throttle:10,1');
     Route::get('/orders/search', [OrderController::class, 'searchByOrderNumber']);
     Route::get('/orders/unassigned-physical', [AgentOrderLookupController::class, 'unassignedPhysicalOrders']);

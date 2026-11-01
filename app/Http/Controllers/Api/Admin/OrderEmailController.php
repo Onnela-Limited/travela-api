@@ -42,6 +42,9 @@ class OrderEmailController extends Controller
         return response()->json(['success' => true, 'data' => [
             'can_prepare' => $prepareReason === null,
             'prepare_reason' => $prepareReason,
+            'recharge_status' => $order->recharge_status,
+            'prepare_label' => $assignments->isEmpty() ? 'Assign number, recharge & email'
+                : ($order->recharge_status === 'success' ? 'Email recharge confirmation' : 'Recharge bundle & email'),
             'assignments' => $assignments->map(fn ($a) => [
                 'id' => $a->id, 'iccid' => $a->esim?->iccid, 'msisdn' => $a->esim?->msisdn,
                 'recipient' => $a->user?->email,

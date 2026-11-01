@@ -365,6 +365,16 @@ class OrderRechargeService
             }
         }
 
+        if ($order->recharge_status === 'success' && data_get($order->metadata, 'email_preparation.notification_status') === 'pending') {
+            DB::afterCommit(function () use ($order) {
+                try {
+                    app(OrderEmailPreparationService::class)->sendPendingNotification($order);
+                } catch (\Throwable $e) {
+                    Log::warning('Recharge succeeded but customer notification needs retry', ['order_id' => $order->id, 'error' => $e->getMessage()]);
+                }
+            });
+        }
+
         return [
             'order_id' => $order->id,
             'recharge_status' => $order->recharge_status,

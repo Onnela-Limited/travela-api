@@ -3,7 +3,9 @@
 namespace App\Services\Esim;
 
 use App\Mail\EsimActivationQrMail;
+use App\Mail\EsimRechargeConfirmationMail;
 use App\Models\Esim;
+use App\Models\Order;
 use App\Models\UserEsim;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +38,8 @@ class EsimActivationEmailService
 
     public function sendIfEligible(UserEsim $assignment): bool
     {
+        $assignment->loadMissing('order');
+        if (data_get($assignment->order?->metadata, 'email_preparation.notification_status') === 'pending') return false;
         return $this->send($assignment, false);
     }
 
@@ -44,7 +48,12 @@ class EsimActivationEmailService
         return $this->send($assignment, true, $adminId);
     }
 
-    private function send(UserEsim $assignment, bool $resend, ?int $adminId = null): bool
+    public function sendRechargeConfirmation(UserEsim $assignment, Order $order, int $adminId, bool $includeQr = false): bool
+    {
+        return $this->send($assignment, true, $adminId, $order, $includeQr);
+    }
+
+    private function send(UserEsim $assignment, bool $resend, ?int $adminId = null, ?Order $rechargeOrder = null, bool $includeQr = false): bool
     {
         $lock = Cache::lock('esim-activation-email:'.$assignment->id, 120);
         if (! $lock->get()) {
@@ -53,8 +62,13 @@ class EsimActivationEmailService
         }
         try {
             $assignment->refresh();
+            $assignment->loadMissing(['esim', 'user', 'order']);
             if (! $resend && $assignment->activation_email_sent_at !== null) return false;
-            $reason = $this->ineligibleReason($assignment);
+            $reason = $rechargeOrder
+                ? ($rechargeOrder->recharge_status !== 'success' ? 'Recharge is not confirmed successful.'
+                    : ((int) $rechargeOrder->user_id !== (int) $assignment->user_id ? 'This SIM does not belong to the order customer.'
+                    : (! $assignment->esim?->msisdn || ! filter_var($assignment->user?->email, FILTER_VALIDATE_EMAIL) ? 'A valid assigned number and customer email are required.' : null)))
+                : $this->ineligibleReason($assignment);
             if ($reason) {
                 if ($resend) abort(422, $reason);
                 return false;
@@ -65,20 +79,30 @@ class EsimActivationEmailService
                 return false;
             }
             $email = trim($assignment->user->email);
+            $emailOrder = $rechargeOrder ?? $assignment->order;
             $attemptId = DB::table('esim_email_attempts')->insertGetId([
-                'order_id' => $assignment->order_id, 'user_esim_id' => $assignment->id,
+                'order_id' => $emailOrder->id, 'user_esim_id' => $assignment->id,
                 'requested_by' => $adminId, 'recipient' => $email, 'status' => 'sending',
                 'created_at' => now(), 'updated_at' => now(),
             ]);
             try {
-                $sent = Mail::to($email)->send(new EsimActivationQrMail(
+                $mail = $rechargeOrder ? new EsimRechargeConfirmationMail(
+                    customerName: trim((string) $assignment->user->name) ?: 'Traveller',
+                    msisdn: $assignment->esim->msisdn,
+                    iccid: $assignment->esim->iccid,
+                    orderReference: $emailOrder->draft_id ?: $emailOrder->payment_reference,
+                    bundleName: $emailOrder->loadMissing('orderItems.bundle')->orderItems->map(fn ($item) => $item->bundle?->name ?? $item->bundle_name ?? 'Data bundle')->implode(', '),
+                    dashboardUrl: $this->customerDashboardUrl(),
+                    qrCodeData: $includeQr ? trim((string) $assignment->esim->qr_code_data) : null,
+                ) : new EsimActivationQrMail(
                     customerName: trim((string) $assignment->user->name) ?: 'Traveller',
                     msisdn: $assignment->esim->msisdn,
                     iccid: $assignment->esim->iccid,
                     orderReference: $assignment->order->draft_id ?: $assignment->order->payment_reference,
                     dashboardUrl: $this->customerDashboardUrl(),
                     qrCodeData: trim($assignment->esim->qr_code_data),
-                ));
+                );
+                $sent = Mail::to($email)->send($mail);
             } catch (Throwable $e) {
                 DB::table('esim_email_attempts')->where('id', $attemptId)->update(['status' => 'failed', 'updated_at' => now()]);
                 Log::error('Failed to send eSIM activation email', ['attempt_id' => $attemptId, 'error' => $e->getMessage()]);

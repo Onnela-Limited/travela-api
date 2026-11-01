@@ -3,9 +3,12 @@
 namespace Tests\Feature;
 
 use App\Mail\EsimActivationQrMail;
+use App\Mail\EsimRechargeConfirmationMail;
 use App\Models\{Bundle, Esim, Order, OrderItem, Trip, User, UserEsim};
 use App\Services\Esim\EsimActivationEmailService;
 use App\Services\Esim\OrderRechargeService;
+use App\Services\Esim\OrderEmailPreparationService;
+use App\Services\Esim\VodacomBalanceService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\{Cache, DB, Http, Mail, Schema};
 use Laravel\Sanctum\Sanctum;
@@ -27,6 +30,8 @@ class OrderEmailTest extends TestCase
             $t->id(); $t->string('name'); $t->string('email'); $t->string('role'); $t->string('password')->nullable(); $t->timestamps();
         });
         Schema::create('orders', function (Blueprint $t) {
+            $t->string('recharge_reference')->nullable(); $t->string('recharge_transaction_id')->nullable();
+            $t->json('recharge_response')->nullable(); $t->unsignedInteger('recharge_http_status')->nullable(); $t->timestamp('recharge_completed_at')->nullable();
             $t->id(); $t->unsignedBigInteger('user_id'); $t->string('draft_id')->nullable();
             $t->string('status')->nullable(); $t->string('payment_status')->nullable(); $t->json('metadata')->nullable();
             $t->string('payment_reference')->nullable(); $t->string('recharge_status')->nullable(); $t->timestamps();
@@ -42,7 +47,7 @@ class OrderEmailTest extends TestCase
             $t->timestamp('activation_email_sent_at')->nullable(); $t->timestamps();
         });
         Schema::create('bundles', function (Blueprint $t) { $t->id(); $t->string('name'); $t->unsignedInteger('sim_bundle_id')->nullable(); $t->timestamps(); });
-        Schema::create('order_items', function (Blueprint $t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('bundle_id'); $t->string('type'); $t->timestamps(); });
+        Schema::create('order_items', function (Blueprint $t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('bundle_id'); $t->string('type'); $t->json('metadata')->nullable(); $t->timestamps(); });
         Schema::create('trips', function (Blueprint $t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->date('arrival_date'); $t->timestamps(); });
         (require database_path('migrations/2026_11_01_000004_create_esim_email_attempts.php'))->up();
         $this->admin = User::create(['name' => 'Admin', 'email' => 'admin@example.test', 'role' => 'admin']);
@@ -57,13 +62,15 @@ class OrderEmailTest extends TestCase
         return '/api/admin/orders/'.$this->order->id.'/email'.$suffix;
     }
 
-    private function mockTransport(): void
+    private function mockTransport(bool $includeQr = true, bool $confirmation = false): void
     {
         $email = (new \Symfony\Component\Mime\Email)->from('sender@example.test')->to('traveller@example.test')->text('QR');
         $email->getHeaders()->addTextHeader('X-Resend-Email-ID', '11111111-2222-3333-4444-555555555555');
         $sent = new \Illuminate\Mail\SentMessage(new \Symfony\Component\Mailer\SentMessage($email, \Symfony\Component\Mailer\Envelope::create($email)));
         Mail::shouldReceive('to')->once()->with('traveller@example.test')->andReturnSelf();
-        Mail::shouldReceive('send')->once()->with(\Mockery::on(fn ($mail) => $mail instanceof EsimActivationQrMail && $mail->iccid === '12345' && $mail->qrCodeData === 'LPA:1$smdp.example.test$QR'))->andReturn($sent);
+        Mail::shouldReceive('send')->once()->with(\Mockery::on(fn ($mail) => $mail instanceof EsimActivationQrMail && $mail->iccid === '12345'
+            && $mail->qrCodeData === ($includeQr ? 'LPA:1$smdp.example.test$QR' : null)
+            && (! $confirmation || ($mail instanceof EsimRechargeConfirmationMail && $mail->bundleName === 'Nomad'))))->andReturn($sent);
     }
 
     public function test_admin_can_resend_and_capture_provider_id_and_check_delivery(): void
@@ -156,7 +163,7 @@ class OrderEmailTest extends TestCase
         $this->assertSame(1, UserEsim::where('order_id', $this->order->id)->count());
         $this->assertSame($this->admin->id, data_get($this->order->fresh()->metadata, 'email_preparation.requested_by'));
         $this->assertDatabaseHas('esim_email_attempts', ['requested_by' => $this->admin->id, 'status' => 'sent']);
-        $this->postJson($this->url('/prepare'))->assertUnprocessable();
+        $this->postJson($this->url('/prepare'))->assertOk()->assertJsonPath('data.email_sent', true);
         $this->assertSame(1, DB::table('esim_email_attempts')->count());
     }
 
@@ -166,7 +173,7 @@ class OrderEmailTest extends TestCase
         $this->mock(OrderRechargeService::class, fn ($mock) => $mock->shouldNotReceive('rechargePaidOrder'));
         $this->order->update(['status' => 'pending', 'payment_status' => 'pending']);
         $this->postJson($this->url('/prepare'))->assertUnprocessable();
-        $this->getJson($this->url())->assertJsonPath('data.can_prepare', false)->assertJsonPath('data.prepare_reason', 'Payment must be confirmed before assigning a number.');
+        $this->getJson($this->url())->assertJsonPath('data.can_prepare', false)->assertJsonPath('data.prepare_reason', 'Payment must be confirmed before recharging the bundle.');
         $this->order->update(['status' => 'paid', 'payment_status' => 'paid']);
         $trip = Trip::create(['order_id' => $this->order->id, 'arrival_date' => now()->addWeek()->toDateString()]);
         $this->postJson($this->url('/prepare'))->assertUnprocessable(); $trip->delete();
@@ -210,5 +217,106 @@ class OrderEmailTest extends TestCase
         Sanctum::actingAs($this->admin);
         UserEsim::create(['user_id' => $this->order->user_id, 'order_id' => $this->order->id + 1, 'esim_id' => $this->assignment->esim_id]);
         $this->postJson($this->url('/prepare'))->assertUnprocessable();
+    }
+
+    private function assignedOrderWithBundle(?string $rechargeStatus = null): void
+    {
+        $this->order->update(['recharge_status' => $rechargeStatus]);
+        $bundle = Bundle::create(['name' => 'Nomad', 'sim_bundle_id' => 66]);
+        OrderItem::create(['order_id' => $this->order->id, 'bundle_id' => $bundle->id, 'type' => 'bundle']);
+        Sanctum::actingAs($this->admin);
+    }
+
+    public function test_existing_number_is_recharged_and_notified_without_qr_or_new_assignment(): void
+    {
+        $this->assignedOrderWithBundle();
+        $this->assignment->esim->update(['qr_code_data' => null]);
+        $this->getJson($this->url())->assertJsonPath('data.can_prepare', true)->assertJsonPath('data.prepare_label', 'Recharge bundle & email');
+        $this->mockTransport(includeQr: false, confirmation: true);
+        $this->mock(OrderRechargeService::class, function ($mock) {
+            $mock->shouldReceive('rechargePaidOrder')->once()->andReturnUsing(function ($order) {
+                $this->assertSame($this->assignment->id, data_get($order->metadata, 'user_esim_id'));
+                $this->assertSame('255700000001', data_get($order->metadata, 'msisdn'));
+                $order->update(['recharge_status' => 'success']); return ['processed' => 1];
+            });
+        });
+        $this->postJson($this->url('/prepare'))->assertOk()->assertJsonPath('data.email_sent', true);
+        $this->postJson($this->url('/prepare'))->assertOk();
+        $this->assertSame(1, UserEsim::count());
+        $this->assertSame(1, DB::table('esim_email_attempts')->count());
+    }
+
+    public function test_successful_recharge_sends_confirmation_without_loading_bundle_again(): void
+    {
+        $this->assignedOrderWithBundle('success');
+        $this->mockTransport(includeQr: false, confirmation: true);
+        $this->mock(OrderRechargeService::class, fn ($mock) => $mock->shouldNotReceive('rechargePaidOrder'));
+        $this->getJson($this->url())->assertJsonPath('data.prepare_label', 'Email recharge confirmation');
+        $this->postJson($this->url('/prepare'))->assertOk();
+        $this->postJson($this->url('/prepare'))->assertOk();
+        $this->assertSame(1, UserEsim::count());
+    }
+
+    public function test_confirmed_failure_can_retry_but_uncertain_carrier_result_cannot(): void
+    {
+        $this->assignedOrderWithBundle('failed'); Mail::fake();
+        $this->mock(OrderRechargeService::class, function ($mock) {
+            $mock->shouldReceive('rechargePaidOrder')->once()->andReturnUsing(function ($order) {
+                $order->update(['recharge_status' => 'success']); return ['processed' => 1];
+            });
+        });
+        $item = $this->order->orderItems()->first();
+        $item->update(['metadata' => ['recharge' => ['status' => 'pending_retry']]]);
+        $this->postJson($this->url('/prepare'))->assertUnprocessable();
+        $item->update(['metadata' => ['recharge' => ['status' => 'failed']]]);
+        $this->postJson($this->url('/prepare'))->assertOk();
+        Mail::assertSent(EsimRechargeConfirmationMail::class, 1);
+    }
+
+    public function test_queued_recharge_callback_sends_confirmation_once(): void
+    {
+        $this->assignedOrderWithBundle(); Mail::fake();
+        $this->mock(OrderRechargeService::class, function ($mock) {
+            $mock->shouldReceive('rechargePaidOrder')->once()->andReturnUsing(function ($order) {
+                $order->update(['recharge_status' => 'queued', 'recharge_reference' => 'RECHARGE-EMAIL']); return ['processed' => 1];
+            });
+        });
+        $this->postJson($this->url('/prepare'))->assertOk()->assertJsonPath('data.email_sent', false);
+        Mail::assertNothingSent();
+        $this->app->forgetInstance(OrderRechargeService::class);
+        $this->mock(VodacomBalanceService::class, function ($mock) {
+            $mock->shouldReceive('requestBalancesForMsisdn')->andReturn(['status' => 'success']);
+        });
+        $callback = ['reference' => 'RECHARGE-EMAIL', 'status' => 'SUCCESS', 'transaction_id' => 'carrier-email-1'];
+        $service = app(OrderRechargeService::class);
+        $this->assertSame('success', $service->applyRechargeCallback($callback)['recharge_status']);
+        $service->applyRechargeCallback($callback);
+        Mail::assertSent(EsimRechargeConfirmationMail::class, 1);
+        $this->assertSame('sent', data_get($this->order->fresh()->metadata, 'email_preparation.notification_status'));
+    }
+
+    public function test_email_failure_retries_only_notification_after_successful_recharge(): void
+    {
+        $this->assignedOrderWithBundle('success');
+        $this->mock(OrderRechargeService::class, fn ($mock) => $mock->shouldNotReceive('rechargePaidOrder'));
+        $manager = Mail::getFacadeRoot();
+        Mail::shouldReceive('to')->once()->andReturnSelf();
+        Mail::shouldReceive('send')->once()->andThrow(new \RuntimeException('Email provider unavailable'));
+        $this->postJson($this->url('/prepare'))->assertStatus(502);
+        $this->assertSame('success', $this->order->fresh()->recharge_status);
+        $this->travel(61)->seconds(); Mail::swap($manager); Mail::fake();
+        $this->postJson($this->url('/prepare'))->assertOk();
+        Mail::assertSent(EsimRechargeConfirmationMail::class, 1);
+        $this->assertSame(1, UserEsim::count());
+    }
+
+    public function test_confirmation_contains_recharge_details_and_existing_number_has_no_attachment(): void
+    {
+        $mail = new EsimRechargeConfirmationMail('Traveller', '255700000001', null, 'EMAIL-1', 'Nomad');
+        $html = $mail->content()->htmlString;
+        $this->assertStringContainsString('successfully added', $html);
+        $this->assertStringContainsString('255700000001', $html);
+        $this->assertStringContainsString('Nomad', $html);
+        $this->assertSame([], $mail->attachments());
     }
 }

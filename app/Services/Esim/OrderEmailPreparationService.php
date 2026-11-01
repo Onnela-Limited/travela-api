@@ -18,7 +18,7 @@ class OrderEmailPreparationService
         private readonly EsimActivationEmailService $email,
     ) {}
 
-    public function unavailableReason(Order $order): ?string
+    public function unavailableReason(Order $order, bool $verifiedMissing = false): ?string
     {
         if (! $this->assignment->orderIsPaid($order)) return 'Payment must be confirmed before recharging the bundle.';
         if ($this->assignment->orderSimType($order) !== Esim::SIM_TYPE_ESIM) return 'This action is only available for eSIM orders.';
@@ -26,7 +26,7 @@ class OrderEmailPreparationService
         $order->loadMissing(['user', 'trip', 'orderItems.bundle']);
         if (! $order->user || ! filter_var(trim((string) $order->user->email), FILTER_VALIDATE_EMAIL)) return 'The order needs a customer with a valid email address.';
         if (! $this->assignment->activationDateIsDue($order)) return 'This eSIM is scheduled for activation on '.$this->assignment->activationDateIso($order).'.';
-        if ($order->recharge_status !== 'success' && (in_array($order->recharge_status, ['sent', 'queued', 'pending', 'in_progress', 'pending_retry'], true)
+        if (! $verifiedMissing && $order->recharge_status !== 'success' && (in_array($order->recharge_status, ['sent', 'queued', 'pending', 'in_progress', 'pending_retry'], true)
             || $order->orderItems->contains(fn ($item) => in_array(data_get($item->metadata, 'recharge.status'), ['sent', 'queued', 'pending', 'in_progress', 'pending_retry'], true)))) {
             return 'A carrier recharge is processing or its result is uncertain. Wait for confirmation before retrying.';
         }
@@ -50,15 +50,54 @@ class OrderEmailPreparationService
         return null;
     }
 
-    public function prepareAndSend(Order $order, int $adminId): array
+    public function verifiedRetryReason(Order $order): ?string
+    {
+        if (! in_array($order->recharge_status, ['sent', 'queued', 'pending', 'in_progress', 'pending_retry', 'failed'], true)) return 'This order has no unresolved recharge to retry.';
+        $reason = $this->unavailableReason($order, true);
+        if ($reason) return $reason;
+        if (data_get($order->metadata, 'email_preparation.notification_status') === 'sent') return 'A completed notification already exists. Review this order before retrying.';
+        $dates = collect([data_get($order->metadata, 'recharge_last_attempt_at'), data_get($order->metadata, 'fulfillment.last_run_at')])
+            ->merge($order->orderItems->map(fn ($item) => data_get($item->metadata, 'recharge.requested_at')))->filter();
+        $latest = $dates->map(fn ($date) => \Carbon\Carbon::parse($date))->sortByDesc(fn ($date) => $date->timestamp)->first() ?? $order->updated_at;
+        if ($latest && $latest->gt(now()->subMinutes(10))) return 'Wait at least 10 minutes after the last recharge attempt before recording a verified retry.';
+        return null;
+    }
+
+    public function retryToken(Order $order): string
+    {
+        $order->loadMissing('orderItems');
+        return hash('sha256', json_encode([$order->id, $order->recharge_status, $order->recharge_reference,
+            $order->updated_at?->format('Y-m-d H:i:s.u'), data_get($order->metadata, 'verified_recharge_retries', []),
+            $order->orderItems->map(fn ($item) => [$item->id, data_get($item->metadata, 'recharge')])->all()]));
+    }
+
+    public function prepareAndSend(Order $order, int $adminId, bool $verifiedMissing = false, ?string $expectedRetryToken = null): array
     {
         $lock = Cache::lock('admin-order-email-prepare:'.$order->user_id, 180);
         abort_unless($lock->get(), 409, 'This customer bundle is already being prepared. Refresh status before retrying.');
         try {
-            DB::transaction(function () use ($order, $adminId) {
+            DB::transaction(function () use ($order, $adminId, $verifiedMissing, $expectedRetryToken) {
                 User::whereKey($order->user_id)->lockForUpdate()->firstOrFail();
                 $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                $reason = $this->unavailableReason($lockedOrder);
+                if ($verifiedMissing) {
+                    abort_unless(is_string($expectedRetryToken) && hash_equals($this->retryToken($lockedOrder), $expectedRetryToken), 409, 'The recharge state changed. Refresh and review it before retrying.');
+                    $retryReason = $this->verifiedRetryReason($lockedOrder);
+                    abort_if($retryReason !== null, 422, $retryReason ?? 'Retry is not available.');
+                    $meta = $lockedOrder->metadata ?? [];
+                    $meta['verified_recharge_retries'][] = ['requested_by' => $adminId, 'requested_at' => now()->toIso8601String(),
+                        'verification' => 'Admin confirmed the previous bundle was not added',
+                        'previous_status' => $lockedOrder->recharge_status, 'previous_reference' => $lockedOrder->recharge_reference,
+                        'previous_items' => $lockedOrder->orderItems->map(fn ($item) => ['id' => $item->id, 'recharge' => data_get($item->metadata, 'recharge')])->all()];
+                    foreach ($lockedOrder->orderItems as $item) {
+                        if ($item->type !== 'bundle' || data_get($item->metadata, 'recharge.status') === 'success') continue;
+                        $itemMeta = $item->metadata ?? [];
+                        $itemMeta['recharge']['status'] = 'failed';
+                        $item->update(['metadata' => $itemMeta]);
+                    }
+                    $meta['recharge_last_attempt_at'] = now()->toIso8601String();
+                    $lockedOrder->update(['metadata' => $meta, 'recharge_status' => 'failed']);
+                }
+                $reason = $this->unavailableReason($lockedOrder, $verifiedMissing);
                 abort_if($reason !== null, 422, $reason ?? 'Order is not eligible.');
                 $assigned = UserEsim::with('esim')->where('order_id', $lockedOrder->id)->first();
                 $newNumber = ! $assigned;

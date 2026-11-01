@@ -9,6 +9,7 @@ use App\Services\Esim\EsimActivationEmailService;
 use App\Services\Esim\OrderRechargeService;
 use App\Services\Esim\OrderEmailPreparationService;
 use App\Services\Esim\VodacomBalanceService;
+use App\Services\Esim\VodacomSimManagerService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\{Cache, DB, Http, Mail, Schema};
 use Laravel\Sanctum\Sanctum;
@@ -318,5 +319,64 @@ class OrderEmailTest extends TestCase
         $this->assertStringContainsString('255700000001', $html);
         $this->assertStringContainsString('Nomad', $html);
         $this->assertSame([], $mail->attachments());
+    }
+
+    private function staleUncertainRecharge(): void
+    {
+        $this->assignedOrderWithBundle('in_progress');
+        $this->order->update(['metadata' => ['simType' => 'esim', 'recharge_last_attempt_at' => now()->subDay()->toIso8601String()]]);
+        $this->order->orderItems()->first()->update(['metadata' => ['recharge' => ['status' => 'pending_retry',
+            'reference' => 'RECHARGE466928645', 'requested_at' => now()->subDay()->toIso8601String(), 'error' => 'Request timed out']]]);
+    }
+
+    public function test_verified_missing_bundle_retries_real_carrier_call_and_records_audit(): void
+    {
+        $this->staleUncertainRecharge(); Mail::fake();
+        $fulfilled = OrderItem::create(['order_id' => $this->order->id, 'bundle_id' => $this->order->orderItems()->first()->bundle_id, 'type' => 'bundle',
+            'metadata' => ['recharge' => ['status' => 'success', 'reference' => 'RECHARGE-ALREADY-LOADED']]]);
+        $response = $this->getJson($this->url())->assertJsonPath('data.can_prepare', false)->assertJsonPath('data.can_retry_verified', true);
+        $token = $response->json('data.retry_token');
+        $this->mock(VodacomSimManagerService::class, function ($mock) {
+            $mock->shouldReceive('post')->once()->with('/api/recharge', [], \Mockery::on(fn ($payload) =>
+                $payload['msisdn'] === '255700000001' && $payload['product_id'] === 66 && $payload['reference'] !== 'RECHARGE466928645'), \Mockery::any())
+                ->andReturn(new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response(200, ['Content-Type' => 'application/json'],
+                    json_encode(['status' => 'SUCCESS', 'transaction_id' => 'retry-success']))));
+        });
+        $this->mock(VodacomBalanceService::class, fn ($mock) => $mock->shouldReceive('requestBalancesForMsisdn')->andReturn(['status' => 'success']));
+        $payload = ['verified_missing_bundle' => true, 'expected_retry_token' => $token];
+        $this->postJson($this->url('/prepare'), $payload)->assertOk()->assertJsonPath('data.email_sent', true);
+        $this->assertSame('success', $this->order->fresh()->recharge_status);
+        $audit = data_get($this->order->fresh()->metadata, 'verified_recharge_retries.0');
+        $this->assertSame($this->admin->id, $audit['requested_by']);
+        $this->assertSame('pending_retry', data_get($audit, 'previous_items.0.recharge.status'));
+        $this->assertSame('RECHARGE-ALREADY-LOADED', data_get($fulfilled->fresh()->metadata, 'recharge.reference'));
+        $this->postJson($this->url('/prepare'), $payload)->assertStatus(409);
+        $this->assertSame(1, UserEsim::count()); Mail::assertSent(EsimRechargeConfirmationMail::class, 1);
+    }
+
+    public function test_verified_retry_rejects_missing_acknowledgment_fresh_attempt_or_stale_state(): void
+    {
+        $this->staleUncertainRecharge(); Mail::fake();
+        $this->mock(OrderRechargeService::class, fn ($mock) => $mock->shouldNotReceive('rechargePaidOrder'));
+        $token = $this->getJson($this->url())->json('data.retry_token');
+        $this->postJson($this->url('/prepare'))->assertUnprocessable();
+        $this->postJson($this->url('/prepare'), ['verified_missing_bundle' => true])->assertUnprocessable();
+        $meta = $this->order->fresh()->metadata; $meta['recharge_last_attempt_at'] = now()->toIso8601String();
+        $this->order->update(['metadata' => $meta]);
+        $newToken = $this->getJson($this->url())->assertJsonPath('data.can_retry_verified', false)->json('data.retry_token');
+        $this->postJson($this->url('/prepare'), ['verified_missing_bundle' => true, 'expected_retry_token' => $newToken])->assertUnprocessable();
+        $this->order->update(['recharge_status' => 'success']);
+        $this->postJson($this->url('/prepare'), ['verified_missing_bundle' => true, 'expected_retry_token' => $token])->assertStatus(409);
+        Mail::assertNothingSent();
+    }
+
+    public function test_timeout_is_saved_as_unconfirmed_instead_of_in_progress(): void
+    {
+        $this->assignedOrderWithBundle(); Mail::fake();
+        $this->mock(VodacomSimManagerService::class, fn ($mock) => $mock->shouldReceive('post')->once()->andThrow(new \Illuminate\Http\Client\ConnectionException('Request timed out')));
+        $this->postJson($this->url('/prepare'))->assertOk()->assertJsonPath('data.email_sent', false);
+        $this->assertSame('pending_retry', $this->order->fresh()->recharge_status);
+        $this->getJson($this->url())->assertJsonPath('data.can_prepare', false)->assertJsonPath('data.can_retry_verified', false);
+        Mail::assertNothingSent();
     }
 }

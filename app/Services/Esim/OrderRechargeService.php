@@ -1106,6 +1106,10 @@ class OrderRechargeService
     {
         $order->refresh();
 
+        if ($order->recharge_status === 'in_progress' && $result['failed'] > 0) {
+            return 'pending_retry';
+        }
+
         if ($order->recharge_status) {
             return $order->recharge_status;
         }
@@ -1135,7 +1139,7 @@ class OrderRechargeService
         DB::transaction(function () use ($order, $result, $rechargeStatus, $paymentId, $transactionRef, $userEsimId) {
             $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
 
-            if (! $order->recharge_status) {
+            if (! $order->recharge_status || ($order->recharge_status === 'in_progress' && $rechargeStatus === 'pending_retry')) {
                 $order->recharge_status = $rechargeStatus;
             }
 

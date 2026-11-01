@@ -39,9 +39,13 @@ class OrderEmailController extends Controller
             }
         }
         $prepareReason = $preparation->unavailableReason($order);
+        $retryReason = $preparation->verifiedRetryReason($order);
         return response()->json(['success' => true, 'data' => [
             'can_prepare' => $prepareReason === null,
             'prepare_reason' => $prepareReason,
+            'can_retry_verified' => $retryReason === null && $prepareReason !== null,
+            'retry_reason' => $retryReason,
+            'retry_token' => $preparation->retryToken($order),
             'recharge_status' => $order->recharge_status,
             'prepare_label' => $assignments->isEmpty() ? 'Assign number, recharge & email'
                 : ($order->recharge_status === 'success' ? 'Email recharge confirmation' : 'Recharge bundle & email'),
@@ -72,6 +76,9 @@ class OrderEmailController extends Controller
 
     public function prepare(Request $request, Order $order, OrderEmailPreparationService $preparation)
     {
-        return response()->json(['success' => true, 'data' => $preparation->prepareAndSend($order, $request->user()->id)]);
+        $data = $request->validate(['verified_missing_bundle' => ['sometimes', 'boolean'],
+            'expected_retry_token' => ['required_if:verified_missing_bundle,true', 'nullable', 'string', 'size:64']]);
+        return response()->json(['success' => true, 'data' => $preparation->prepareAndSend($order, $request->user()->id,
+            (bool) ($data['verified_missing_bundle'] ?? false), $data['expected_retry_token'] ?? null)]);
     }
 }

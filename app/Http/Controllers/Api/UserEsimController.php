@@ -18,6 +18,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class UserEsimController extends Controller
 {
@@ -149,6 +150,7 @@ class UserEsimController extends Controller
     {
         $data = $request->validate([
             'since' => ['required', 'date'],
+            'require_data' => ['nullable', 'boolean'],
             'msisdn' => ['nullable', 'string'],
         ]);
 
@@ -162,6 +164,16 @@ class UserEsimController extends Controller
             ->with('esim')
             ->get();
 
+        if ($msisdnFilter && ! $assignments->contains(fn ($row) =>
+            $row->esim?->msisdn && Esim::normalizeMsisdn($row->esim->msisdn) === $msisdnFilter)) {
+            abort(404, 'This number is not assigned to your account.');
+        }
+        $requiresData = $request->boolean('require_data');
+        $ready = function ($fetched, $balances) use ($since, $requiresData) {
+            $data = $balances['DATA'] ?? $balances['data'] ?? null;
+            return $this->balanceIsFresh($fetched, $since, $balances) &&
+                (! $requiresData || ($data !== null && $data !== '' && is_numeric($data)));
+        };
         foreach ($assignments as $assignment) {
             $esim = $assignment->esim;
             if (! $esim?->msisdn) {
@@ -175,7 +187,14 @@ class UserEsimController extends Controller
 
             [$fetchedAt, $balances] = $this->latestStoredBalances($assignment, $esim);
 
-            if ($this->balanceIsFresh($fetchedAt, $since, $balances)) {
+            if (! $ready($fetchedAt, $balances) && Cache::add('dashboard-balance-refresh:'.$assignment->id, true, 10)) {
+                try { $this->balances->requestBalancesForMsisdn($esim->msisdn); }
+                catch (\Throwable $e) { Log::warning('Dashboard balance refresh failed', ['user_esim_id' => $assignment->id, 'error' => $e->getMessage()]); }
+                $assignment->refresh();
+                $esim->refresh();
+                [$fetchedAt, $balances] = $this->latestStoredBalances($assignment, $esim);
+            }
+            if ($ready($fetchedAt, $balances)) {
                 $assignment = $this->esimOrderLink->ensureAssignmentLinked($assignment);
                 $assignment->loadMissing(['esim', 'bundle.type', 'order', 'orderItem']);
 

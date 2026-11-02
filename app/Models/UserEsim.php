@@ -111,10 +111,13 @@ class UserEsim extends Model
             $data['latest_order'] = $service->latestOrderForUser((int) $this->user_id);
         }
 
+        $bundleState = app(\App\Services\Esim\BundleHistoryService::class)->forAssignment($this);
+
         return array_merge(
             $data,
+            $bundleState,
             app(PhysicalSimIssuanceService::class)->issuancePayload($this),
-            $service->planWindowForAssignment($this),
+            $service->planWindowForAssignment($this, $bundleState['bundle_history']),
         );
     }
 }

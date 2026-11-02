@@ -252,7 +252,11 @@ class EsimController extends Controller
             ]);
         }
 
-        $orderResult = $this->orderRecharge->applyRechargeCallback(is_array($raw) ? $raw : $payload);
+        $customerRecharge = app(\App\Services\Esim\CustomerBundleRechargeService::class)
+            ->callback(is_array($raw) ? $raw : $payload);
+        $orderResult = $customerRecharge
+            ? ['order_id' => null, 'recharge_status' => null]
+            : $this->orderRecharge->applyRechargeCallback(is_array($raw) ? $raw : $payload);
 
         if (VodacomRechargePayload::isSuccessStatus($payload) && $esim->msisdn && empty($orderResult['order_id'])) {
             try {

@@ -92,7 +92,7 @@ class EsimActivationEmailService
                     iccid: $assignment->esim->iccid,
                     orderReference: $emailOrder->draft_id ?: $emailOrder->payment_reference,
                     bundleName: $emailOrder->loadMissing('orderItems.bundle')->orderItems->map(fn ($item) => $item->bundle?->name ?? $item->bundle_name ?? 'Data bundle')->implode(', '),
-                    dashboardUrl: $this->customerDashboardUrl(),
+                    dashboardUrl: RechargeDashboardLink::forNumber($assignment->esim->msisdn, $emailOrder->recharge_reference),
                     qrCodeData: $includeQr ? trim((string) $assignment->esim->qr_code_data) : null,
                 ) : new EsimActivationQrMail(
                     customerName: trim((string) $assignment->user->name) ?: 'Traveller',

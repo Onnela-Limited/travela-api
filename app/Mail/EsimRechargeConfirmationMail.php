@@ -36,6 +36,6 @@ class EsimRechargeConfirmationMail extends EsimActivationQrMail
             <h2>Your data bundle is ready</h2><p>Hi {$name}, your data bundle has been successfully added to your Travela number.</p>
             <p><strong>Phone number:</strong> {$number}</p><p><strong>Bundle:</strong> {$bundle}</p>
             <p><strong>Order reference:</strong> {$reference}</p>{$qr}
-            <p>Bundle validity starts from the successful recharge.</p><p><a href='{$url}'>View your bundle in your dashboard</a></p></div>");
+            <p>Open your dashboard to see your total remaining data, including any data still available from earlier bundles, and the expiry date of each bundle.</p><p><a href='{$url}'>View your bundle in your dashboard</a></p></div>");
     }
 }

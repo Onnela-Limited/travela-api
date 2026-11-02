@@ -271,6 +271,7 @@ class OrderRechargeService
         $rechargeStatus = $this->deriveOrderRechargeStatus($order, $result);
         $this->recordFulfillmentSummary($order, $result, $rechargeStatus, $paymentId, $transactionRef, $assignment->id);
         $result['recharge_status'] = $rechargeStatus;
+        app(OrderTopupNotificationService::class)->sendIfConfirmed($order->fresh());
 
         return $result;
     }
@@ -374,6 +375,8 @@ class OrderRechargeService
                 }
             });
         }
+
+        app(OrderTopupNotificationService::class)->sendIfConfirmed($order);
 
         return [
             'order_id' => $order->id,

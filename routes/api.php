@@ -117,6 +117,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::delete('/user-esims/{id}', [AdminUserEsimController::class, 'destroy']);
     Route::post('/user-esims/sync-from-vodacom', [AdminUserEsimController::class, 'syncFromVodacom']);
 
+    Route::post('/customers/{user}/bundle-recharges', [\App\Http\Controllers\Admin\CustomerBundleRechargeController::class, 'store']);
+
     // Customers
     Route::get('/customers', [CustomerController::class, 'index']);
 

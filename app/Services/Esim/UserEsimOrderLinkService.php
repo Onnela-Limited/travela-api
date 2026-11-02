@@ -182,8 +182,17 @@ class UserEsimOrderLinkService
     }
 
     /** The data validity window starts at confirmed recharge, not installation. */
-    public function planWindowForAssignment(UserEsim $assignment): array
+    public function planWindowForAssignment(UserEsim $assignment, ?array $history = null): array
     {
+        $history ??= app(BundleHistoryService::class)->forAssignment($assignment)['bundle_history'];
+        if ($history !== []) {
+            $active = array_values(array_filter($history, fn ($row) => ! $row['expired']));
+            $window = $active ?: [$history[0]];
+            $start = min(array_column($window, 'added_at'));
+            $end = max(array_column($window, 'expires_at'));
+            return ['plan_validity_days' => BundleValidity::DAYS, 'plan_started_at' => $start,
+                'plan_expires_at' => $end, 'plan_expired' => $active === []];
+        }
         $order = Order::query()
             ->where('user_id', $assignment->user_id)
             ->where('recharge_status', 'success')

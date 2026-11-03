@@ -36,7 +36,7 @@ class CustomerBundleRechargeService
             $sim = $assignment->esim;
             abort_unless($sim?->msisdn && $sim->network_id && ! $sim->partner_bulk_order_id, 422, 'This customer number is unavailable for recharge.');
             abort_unless($bundle->active && $bundle->sim_bundle_id &&
-                (int) $bundle->network_id === (int) $sim->network_id && BundleVisibility::visibleTo($user, $bundle),
+                \App\Support\BundleNetwork::resolve($bundle) === (int) $sim->network_id && BundleVisibility::visibleTo($user, $bundle),
                 422, 'This bundle is unavailable for the selected number.');
             abort_unless(filter_var($user->email, FILTER_VALIDATE_EMAIL), 422, 'The customer needs a valid email address.');
 

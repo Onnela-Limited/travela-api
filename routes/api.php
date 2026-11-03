@@ -119,6 +119,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::post('/customers/{user}/bundle-recharges', [\App\Http\Controllers\Admin\CustomerBundleRechargeController::class, 'store']);
 
+    Route::post('/customers/{user}/esims/{userEsim}/allow-activation', [\App\Http\Controllers\Admin\CustomerActivationRetryController::class, 'store'])->middleware('throttle:10,1');
+
     // Customers
     Route::get('/customers', [CustomerController::class, 'index']);
 

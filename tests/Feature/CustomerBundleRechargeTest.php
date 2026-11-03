@@ -113,6 +113,37 @@ class CustomerBundleRechargeTest extends TestCase
         $this->postJson($this->url($user), $payload)->assertOk()->assertJsonPath('status', 'success');
     }
 
+    public function test_catalog_resolves_missing_vodacom_network_without_exposing_provider_metadata(): void
+    {
+        [$user, $sim, $bundle] = $this->fixture();
+        $bundle->update(['network_id' => null]);
+        $this->getJson('/api/public/bundles?active=1')->assertOk()
+            ->assertJsonPath('bundles.0.network_id', 1)->assertJsonMissingPath('bundles.0.country_provider');
+        $this->assertNull($bundle->fresh()->network_id);
+    }
+
+    public function test_recharge_accepts_missing_bundle_network_using_its_vodacom_provider(): void
+    {
+        [$user, $sim, $bundle] = $this->fixture();
+        $bundle->update(['network_id' => null]);
+        $this->provider(['status' => 'SUCCESS']);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertOk()->assertJsonPath('status', 'success');
+        Mail::assertSentCount(1);
+    }
+
+    public function test_missing_bundle_network_cannot_match_an_unknown_or_different_provider(): void
+    {
+        [$user, $sim, $bundle] = $this->fixture();
+        $bundle->update(['network_id' => null]);
+        $provider = $bundle->countryProvider->provider;
+        $provider->update(['slug' => 'other', 'metadata' => ['network_id' => 2]]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable();
+        $provider->update(['metadata' => []]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable();
+        $this->assertDatabaseCount('customer_bundle_recharges', 0);
+        Mail::assertNothingSent();
+    }
+
     private function fixture(): array
     {
         Mail::fake();

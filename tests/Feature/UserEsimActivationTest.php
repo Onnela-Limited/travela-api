@@ -175,6 +175,8 @@ class UserEsimActivationTest extends TestCase
             'device_activated_at' => $activatedAt,
         ]);
 
+        // Compare the stored value: database timestamps do not retain PHP microseconds.
+        $storedActivatedAt = $assignment->fresh()->device_activated_at;
         Sanctum::actingAs($user);
 
         $response = $this->postJson("/api/me/esims/{$assignment->id}/device-activated");
@@ -183,7 +185,7 @@ class UserEsimActivationTest extends TestCase
             ->assertJsonPath('success', true);
 
         $assignment->refresh();
-        $this->assertTrue($assignment->device_activated_at->equalTo($activatedAt));
+        $this->assertTrue($assignment->device_activated_at->equalTo($storedActivatedAt));
     }
 
     public function test_user_cannot_mark_device_activated_for_another_users_esim(): void

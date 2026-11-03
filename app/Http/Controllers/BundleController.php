@@ -12,7 +12,7 @@ class BundleController extends Controller
     {
         $user = BundleVisibility::resolveOptionalUser($request);
 
-        $q = Bundle::query();
+        $q = Bundle::with('countryProvider.provider');
 
         // Hide bundles not meant for storefront listing.
         // $q->where(function ($w) {
@@ -30,7 +30,8 @@ class BundleController extends Controller
         );
 
         $bundles = collect($bundles)->map(function (Bundle $bundle) {
-            $data = $bundle->toArray();
+            $data = $bundle->attributesToArray();
+            $data['network_id'] = \App\Support\BundleNetwork::resolve($bundle);
             $data['price'] = $data['price_usd'];
             unset($data['price_usd']);
 

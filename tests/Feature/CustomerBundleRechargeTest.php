@@ -144,6 +144,46 @@ class CustomerBundleRechargeTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    public function test_live_legacy_ttcl_seeded_catalog_products_resolve_and_30gb_recharge_succeeds(): void
+    {
+        [$user, $sim, $bundle] = $this->fixture();
+        $bundle->countryProvider->provider->update(['name' => 'TTCL', 'slug' => 'ttcl', 'metadata' => []]);
+        foreach ([3232, 3233, 28, 3234] as $productId) {
+            $bundle->update(['network_id' => null, 'sim_bundle_id' => $productId, 'metadata' => ['source' => 'BundleSeeder']]);
+            $this->getJson('/api/public/bundles?active=1')->assertOk()->assertJsonPath('bundles.0.network_id', 1);
+        }
+        $this->mock(VodacomSimManagerService::class, function ($mock) {
+            $mock->shouldReceive('post')->once()->with('/api/recharge', [], \Mockery::on(fn ($payload) =>
+                $payload['network_id'] === 1 && $payload['product_id'] === 3234 && $payload['msisdn'] === '255797053059'))
+                ->andReturn(new \Illuminate\Http\Client\Response(Http::response(['status' => 'SUCCESS'], 200)->wait()));
+        });
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertOk()->assertJsonPath('status', 'success');
+        $this->assertDatabaseHas('customer_bundle_recharges', ['product_id' => 3234, 'network_id' => 1, 'status' => 'success']);
+        $this->assertNull($bundle->fresh()->network_id);
+        Mail::assertSentCount(1);
+    }
+
+    public function test_legacy_fallback_does_not_override_explicit_networks_or_accept_unknown_products(): void
+    {
+        [$user, $sim, $bundle] = $this->fixture();
+        $provider = $bundle->countryProvider->provider;
+        $provider->update(['slug' => 'ttcl', 'metadata' => []]);
+        $bundle->update(['network_id' => 2, 'sim_bundle_id' => 3234, 'metadata' => ['source' => 'BundleSeeder']]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable()
+            ->assertJsonPath('message', 'This bundle and the selected number belong to different mobile networks.');
+        $bundle->update(['network_id' => null]);
+        $provider->update(['metadata' => ['network_id' => 2]]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable();
+        $provider->update(['metadata' => []]);
+        $bundle->update(['sim_bundle_id' => 99999]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable()
+            ->assertJsonPath('message', 'This bundle has no configured mobile network. Its catalog network must be corrected.');
+        $bundle->update(['sim_bundle_id' => 3234, 'metadata' => []]);
+        $this->postJson($this->url($user), $this->payload($sim, $bundle))->assertUnprocessable();
+        $this->assertDatabaseCount('customer_bundle_recharges', 0);
+        Mail::assertNothingSent();
+    }
+
     private function fixture(): array
     {
         Mail::fake();

@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\Bundle;
 use App\Models\BundleType;
 use App\Models\CountryProvider;
+use App\Models\Esim;
 use Illuminate\Database\Seeder;
 
 class BundleSeeder extends Seeder
@@ -130,7 +131,8 @@ class BundleSeeder extends Seeder
         return [
             'bundle_type_id' => $bundleTypeId,
             'country_provider_id' => $countryProviderId,
-            'network_id' => null,
+            // Every product in this seeder belongs to the configured SIM network.
+            'network_id' => Esim::defaultNetworkId(),
             'external_id' => null,
             'voice_minutes' => null,
             'sms' => null,

@@ -35,9 +35,20 @@ class CustomerBundleRechargeService
             $bundle = Bundle::findOrFail($data['bundle_id']);
             $sim = $assignment->esim;
             abort_unless($sim?->msisdn && $sim->network_id && ! $sim->partner_bulk_order_id, 422, 'This customer number is unavailable for recharge.');
-            abort_unless($bundle->active && $bundle->sim_bundle_id &&
-                \App\Support\BundleNetwork::resolve($bundle) === (int) $sim->network_id && BundleVisibility::visibleTo($user, $bundle),
-                422, 'This bundle is unavailable for the selected number.');
+            abort_unless($bundle->active, 422, 'This bundle is inactive.');
+            abort_unless($bundle->sim_bundle_id, 422, 'This bundle has no mobile-network product configured.');
+            $bundleNetwork = \App\Support\BundleNetwork::resolve($bundle);
+            if ($bundleNetwork === null || $bundleNetwork !== (int) $sim->network_id) {
+                Log::warning('Customer bundle network validation failed', [
+                    'bundle_id' => $bundle->id, 'user_esim_id' => $assignment->id,
+                    'catalog_provider_id' => $bundle->country_provider_id, 'product_id' => $bundle->sim_bundle_id,
+                    'stored_bundle_network_id' => $bundle->network_id, 'resolved_bundle_network_id' => $bundleNetwork,
+                    'sim_network_id' => $sim->network_id,
+                ]);
+            }
+            abort_unless($bundleNetwork !== null, 422, 'This bundle has no configured mobile network. Its catalog network must be corrected.');
+            abort_unless($bundleNetwork === (int) $sim->network_id, 422, 'This bundle and the selected number belong to different mobile networks.');
+            abort_unless(BundleVisibility::visibleTo($user, $bundle), 422, 'This bundle is not available to this customer.');
             abort_unless(filter_var($user->email, FILTER_VALIDATE_EMAIL), 422, 'The customer needs a valid email address.');
 
             // Persist before contacting the provider so a fast callback can find the request.

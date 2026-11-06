@@ -38,6 +38,7 @@ class UserEsimOrderLinkService
      */
     public function linkAssignmentFromLatestPaidOrder(UserEsim $assignment): UserEsim
     {
+        if ($assignment->number_assignment_request_id) return $assignment;
         $order = $this->paidOrdersForUser((int) $assignment->user_id)->first();
 
         if (! $order) {
@@ -92,6 +93,7 @@ class UserEsimOrderLinkService
             return $this->formatBundlePayload($bundle, $orderItem, $order);
         }
 
+        if ($assignment->number_assignment_request_id) return null;
         return $this->bundleForUser((int) $assignment->user_id);
     }
 

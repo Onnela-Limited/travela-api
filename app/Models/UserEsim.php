@@ -22,6 +22,9 @@ class UserEsim extends Model
     }
 
     protected $fillable = [
+        'number_assignment_request_id',
+        'number_assigned_by',
+        'previous_user_esim_id',
         'user_id',
         'esim_id',
         'bundle_id',
@@ -112,6 +115,8 @@ class UserEsim extends Model
         }
 
         $bundleState = app(\App\Services\Esim\BundleHistoryService::class)->forAssignment($this);
+
+        $data['number_assignment_only'] = (bool) $this->number_assignment_request_id && $bundleState['bundle_history'] === [] && ! $this->order_id;
 
         return array_merge(
             $data,

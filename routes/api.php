@@ -122,6 +122,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/customers/{user}/esims/{userEsim}/allow-activation', [\App\Http\Controllers\Admin\CustomerActivationRetryController::class, 'store'])->middleware('throttle:10,1');
 
     // Customers
+    Route::get('/customers/{user}/available-numbers', [\App\Http\Controllers\Admin\CustomerNumberAssignmentController::class, 'available']);
+    Route::post('/customers/{user}/number-assignments', [\App\Http\Controllers\Admin\CustomerNumberAssignmentController::class, 'store']);
     Route::get('/customers', [CustomerController::class, 'index']);
 
     // Agents

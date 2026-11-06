@@ -40,6 +40,14 @@ class OrderEmailController extends Controller
         }
         $prepareReason = $preparation->unavailableReason($order);
         $retryReason = $preparation->verifiedRetryReason($order);
+        $lastAttempt = $preparation->lastAttemptAt($order);
+        $body = \App\Services\Esim\VodacomRechargePayload::unwrapResponse($order->recharge_response ?? []);
+        $providerMessage = $body['message'] ?? $body['Message'] ?? $body['error'] ?? null;
+        $errors = collect([data_get($order->metadata, 'recharge_error'), $providerMessage])
+            ->merge(data_get($order->metadata, 'fulfillment.errors', []))
+            ->merge($order->orderItems->map(fn ($item) => data_get($item->metadata, 'recharge.error')))
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->map(fn ($value) => mb_substr($value, 0, 2000))->unique()->values();
         return response()->json(['success' => true, 'data' => [
             'can_prepare' => $prepareReason === null,
             'prepare_reason' => $prepareReason,
@@ -47,6 +55,13 @@ class OrderEmailController extends Controller
             'retry_reason' => $retryReason,
             'retry_token' => $preparation->retryToken($order),
             'recharge_status' => $order->recharge_status,
+            'recharge_diagnostics' => [
+                'reference' => $order->recharge_reference,
+                'http_status' => $order->recharge_http_status ?: null,
+                'last_attempt_at' => $lastAttempt?->toIso8601String(),
+                'retry_available_at' => $lastAttempt?->copy()->addMinutes(10)->toIso8601String(),
+                'errors' => $errors,
+            ],
             'prepare_label' => $assignments->isEmpty() ? 'Assign number, recharge & email'
                 : ($order->recharge_status === 'success' ? 'Email recharge confirmation' : 'Recharge bundle & email'),
             'assignments' => $assignments->map(fn ($a) => [

@@ -56,11 +56,21 @@ class OrderEmailPreparationService
         $reason = $this->unavailableReason($order, true);
         if ($reason) return $reason;
         if (data_get($order->metadata, 'email_preparation.notification_status') === 'sent') return 'A completed notification already exists. Review this order before retrying.';
-        $dates = collect([data_get($order->metadata, 'recharge_last_attempt_at'), data_get($order->metadata, 'fulfillment.last_run_at')])
-            ->merge($order->orderItems->map(fn ($item) => data_get($item->metadata, 'recharge.requested_at')))->filter();
-        $latest = $dates->map(fn ($date) => \Carbon\Carbon::parse($date))->sortByDesc(fn ($date) => $date->timestamp)->first() ?? $order->updated_at;
+        $latest = $this->lastAttemptAt($order);
         if ($latest && $latest->gt(now()->subMinutes(10))) return 'Wait at least 10 minutes after the last recharge attempt before recording a verified retry.';
         return null;
+    }
+
+    public function lastAttemptAt(Order $order): ?\Carbon\Carbon
+    {
+        $order->loadMissing('orderItems');
+        // Fulfillment scans and unrelated edits are not carrier attempts.
+        $dates = collect([data_get($order->metadata, 'recharge_last_attempt_at')])
+            ->merge($order->orderItems->map(fn ($item) => data_get($item->metadata, 'recharge.requested_at')))
+            ->filter()->map(function ($date) {
+                try { return \Carbon\Carbon::parse($date); } catch (\Throwable) { return null; }
+            })->filter();
+        return $dates->sortByDesc(fn ($date) => $date->timestamp)->first() ?? $order->created_at;
     }
 
     public function retryToken(Order $order): string

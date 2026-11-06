@@ -109,6 +109,7 @@ class AdminUserEsimController extends Controller
             return response()->json(['message' => 'Not found'], 404);
         }
 
+        abort_if($esim->number_assignment_request_id || UserEsim::where('previous_user_esim_id', $esim->id)->exists(), 409, 'This assignment is part of a number change and must remain reserved for its audit history.');
         $esim->delete();
 
         return response()->json(['message' => 'Deleted']);

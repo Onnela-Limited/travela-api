@@ -7,6 +7,7 @@ use App\Models\Esim;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\UserEsim;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -37,6 +38,21 @@ class OrderRechargeService
      */
     public function fulfillOrder(Order $order, ?array $evpayContext = null): array
     {
+        // Payment webhooks, dashboard setup and the scheduler share this lock.
+        $lock = Cache::lock('order-carrier-recharge:'.$order->id, 300);
+        if (! $lock->get()) {
+            return ['processed' => 0, 'skipped' => 0, 'failed' => 0,
+                'errors' => ['Recharge is already being processed.'], 'recharge_status' => 'in_progress'];
+        }
+        try {
+            return $this->fulfillLockedOrder($order, $evpayContext);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function fulfillLockedOrder(Order $order, ?array $evpayContext): array
+    {
         $order->refresh();
         $order->loadMissing(['orderItems.bundle']);
 
@@ -63,6 +79,17 @@ class OrderRechargeService
                 'errors' => [],
                 'recharge_status' => 'success',
             ];
+        }
+
+        // An unknown outcome is not evidence that the carrier did nothing.
+        // Only the verified admin retry resets these states to failed.
+        $unresolved = ['sent', 'queued', 'pending', 'in_progress', 'pending_retry'];
+        if (in_array($order->recharge_status, $unresolved, true)
+            || $this->rechargeableItems($order)->contains(fn ($item) =>
+                in_array(data_get($item->metadata, 'recharge.status'), $unresolved, true))) {
+            return ['processed' => 0, 'skipped' => $this->rechargeableItems($order)->count(),
+                'failed' => 0, 'errors' => [],
+                'recharge_status' => $order->recharge_status ?: 'pending_retry'];
         }
 
         if ($this->shouldSkipRechargeForPayment($order, $paymentId, $transactionRef)) {
@@ -181,6 +208,11 @@ class OrderRechargeService
 
             $rechargeLog = $this->rechargePayloadLog($order, $assignment, $payload);
 
+            // Save the reference before the external call, including worker termination.
+            $this->persistOrderRechargeInProgress($order, $reference, null, [], 'in_progress', 0);
+            $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
+                $reference, null, 'in_progress', 0, $payload, []
+            ));
             Log::info('Vodacom recharge request payload', $rechargeLog);
 
             try {
@@ -306,6 +338,7 @@ class OrderRechargeService
             $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
             $meta = $this->orderMetadata($order);
             $meta['recharge_callback'] = $raw;
+            $order->metadata = $meta;
             $order->recharge_response = $raw;
             $order->recharge_http_status = $order->recharge_http_status ?: 200;
 

@@ -379,4 +379,76 @@ class OrderEmailTest extends TestCase
         $this->getJson($this->url())->assertJsonPath('data.can_prepare', false)->assertJsonPath('data.can_retry_verified', false);
         Mail::assertNothingSent();
     }
+    public function test_automatic_setup_does_not_repeat_uncertain_recharges_or_restart_retry_clock(): void
+    {
+        $this->staleUncertainRecharge();
+        $this->mock(VodacomSimManagerService::class, fn ($mock) => $mock->shouldNotReceive('post'));
+        $before = $this->order->fresh()->getRawOriginal();
+        foreach (['pending_retry', 'queued', 'pending', 'sent', 'in_progress'] as $status) {
+            $this->order->update(['recharge_status' => $status]);
+            $original = $this->order->fresh()->getRawOriginal();
+            $result = app(OrderRechargeService::class)->rechargePaidOrder($this->order);
+            $this->assertSame(0, $result['processed']);
+            $this->assertSame($status, $result['recharge_status']);
+            $this->assertSame($original, $this->order->fresh()->getRawOriginal());
+            $this->getJson($this->url())->assertOk()->assertJsonPath('data.can_retry_verified', true);
+        }
+        $this->assertSame($before['metadata'], $this->order->fresh()->getRawOriginal('metadata'));
+    }
+
+    public function test_timeout_does_not_repeat_on_dashboard_or_scheduler_and_can_be_verified_later(): void
+    {
+        $this->assignedOrderWithBundle(); Mail::fake();
+        $this->mock(VodacomSimManagerService::class, fn ($mock) => $mock->shouldReceive('post')->once()
+            ->andThrow(new \Illuminate\Http\Client\ConnectionException('Carrier connection timed out')));
+        $service = app(OrderRechargeService::class);
+        $service->rechargePaidOrder($this->order);
+        $this->order->refresh();
+        $attempt = data_get($this->order->metadata, 'recharge_last_attempt_at');
+        $reference = $this->order->recharge_reference;
+        $this->assertNotEmpty($reference);
+        for ($i = 0; $i < 11; $i++) {
+            $this->travel(1)->minutes();
+            $service->rechargePaidOrder($this->order);
+        }
+        $this->assertSame($attempt, data_get($this->order->fresh()->metadata, 'recharge_last_attempt_at'));
+        $this->getJson($this->url())->assertOk()->assertJsonPath('data.can_retry_verified', true)
+            ->assertJsonPath('data.recharge_diagnostics.reference', $reference)
+            ->assertJsonPath('data.recharge_diagnostics.errors.0', 'Carrier connection timed out');
+        Mail::assertNothingSent();
+    }
+
+    public function test_fulfillment_scans_do_not_extend_verified_retry_cooldown(): void
+    {
+        $this->staleUncertainRecharge();
+        $meta = $this->order->fresh()->metadata;
+        $meta['fulfillment']['last_run_at'] = now()->toIso8601String();
+        $this->order->update(['metadata' => $meta]);
+        $this->getJson($this->url())->assertOk()->assertJsonPath('data.can_retry_verified', true);
+    }
+
+    public function test_concurrent_setup_cannot_submit_a_second_carrier_request(): void
+    {
+        $this->assignedOrderWithBundle();
+        $lock = Cache::lock('order-carrier-recharge:'.$this->order->id, 300);
+        $this->assertTrue($lock->get());
+        $this->mock(VodacomSimManagerService::class, fn ($mock) => $mock->shouldNotReceive('post'));
+        try {
+            $result = app(OrderRechargeService::class)->rechargePaidOrder($this->order);
+            $this->assertSame('in_progress', $result['recharge_status']);
+            $this->assertNull($this->order->fresh()->recharge_status);
+        } finally { $lock->release(); }
+    }
+
+    public function test_pending_item_blocks_resubmission_even_if_order_status_is_failed(): void
+    {
+        $this->staleUncertainRecharge();
+        $this->order->update(['recharge_status' => 'failed']);
+        $this->mock(VodacomSimManagerService::class, fn ($mock) => $mock->shouldNotReceive('post'));
+        $result = app(OrderRechargeService::class)->rechargePaidOrder($this->order);
+        $this->assertSame(0, $result['processed']);
+        $this->getJson($this->url())->assertOk()->assertJsonPath('data.can_prepare', false)
+            ->assertJsonPath('data.can_retry_verified', true);
+    }
+
 }

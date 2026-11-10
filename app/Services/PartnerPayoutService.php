@@ -84,7 +84,7 @@ class PartnerPayoutService
             }
             return PartnerPayout::create(['partner_application_id' => $application->id, 'request_key' => $key,
                 'reference' => 'PP-'.Str::upper((string) Str::uuid()), 'amount_cents' => $balances['available'], 'currency' => 'USD',
-                'destination' => $this->destination($application), 'status' => 'pending']);
+                'destination' => $this->destination($application), 'status' => 'pending'])->refresh();
         }, 3);
     }
 

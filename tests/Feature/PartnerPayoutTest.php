@@ -263,6 +263,16 @@ class PartnerPayoutTest extends TestCase
         $this->assertSame(0,DB::table('partner_notifications')->whereNotNull('partner_team_member_id')->count());
     }
 
+    public function test_first_payout_response_is_complete_and_matches_an_idempotent_retry(): void
+    {
+        $partner=$this->partner();$this->order($partner);$this->asPartner($partner);$body=$this->payload();
+        $first=$this->postJson('/api/partner-auth/payouts',$body)->assertOk()
+            ->assertJsonPath('payout.version',0)->assertJsonPath('payout.status','pending')
+            ->assertJsonPath('payout.paymentReference',null)->assertJsonPath('payout.transferAmount',null)->assertJsonPath('payout.paidAt',null);
+        $this->postJson('/api/partner-auth/payouts',$body)->assertOk()->assertExactJson($first->json());
+        $this->assertSame(1,PartnerPayout::where('partner_application_id',$partner->id)->count());
+    }
+
     private function payload(string $amount = '10.00'): array
     {
         return ['request_key' => (string) Str::uuid(), 'expected_amount' => $amount, 'destination_confirmed' => true];

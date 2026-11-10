@@ -65,7 +65,17 @@ class PartnerAuthController extends Controller
             } catch (Throwable $exception) {
                 DB::table('partner_login_challenges')->where('id', $challengeId)->update(['consumed_at' => now()]);
                 // Never log the code, address, or provider response containing private data.
-                Log::warning('Partner sign-in email delivery failed.', ['exception_type' => get_class($exception)]);
+                $reason = strtolower($exception->getMessage());
+                $category = match (true) {
+                    Str::contains($reason, ['certificate', 'issuer certificate', 'curl error 60']) => 'certificate_trust',
+                    Str::contains($reason, ['not verified', 'verify your domain', 'unverified']) => 'sender_not_verified',
+                    Str::contains($reason, ['restricted', 'permission', 'not allowed', 'only send', 'authorized', 'unauthorised']) => 'provider_permission',
+                    Str::contains($reason, ['api key', 'unauthorized', 'invalid token']) => 'provider_credentials',
+                    Str::contains($reason, ['rate limit', 'quota', 'too many']) => 'provider_limit',
+                    Str::contains($reason, ['connect', 'timed out', 'resolve host']) => 'provider_connection',
+                    default => 'provider_other',
+                };
+                Log::warning('Partner sign-in email delivery failed.', ['exception_type' => get_class($exception), 'reason' => $category]);
             }
         }
 

@@ -80,6 +80,19 @@ class PartnerApplicationReviewTest extends TestCase
         $this->getJson('/api/admin/partner-applications?per_page=500')->assertUnprocessable();
     }
 
+    public function test_admin_review_retains_first_and_last_names(): void
+    {
+        $this->admin();
+        $application = $this->application();
+        $payload = $application->application_payload;
+        $payload['profile']['firstName'] = 'Asha';
+        $payload['profile']['lastName'] = 'Mwinyi';
+        $application->update(['application_payload' => $payload]);
+        $this->getJson("/api/admin/partner-applications/{$application->id}")->assertOk()
+            ->assertJsonPath('application.details.profile.firstName', 'Asha')
+            ->assertJsonPath('application.details.profile.lastName', 'Mwinyi');
+    }
+
     public function test_admin_can_read_details_and_private_document_without_public_storage_paths(): void
     {
         $this->admin();
@@ -196,6 +209,35 @@ class PartnerApplicationReviewTest extends TestCase
         $this->admin();$application=$this->application();$this->review($application,'info_requested',0,'PRIVATE-NOTE')->assertOk();
         $row=DB::table('partner_notifications')->sole();$summary=app(\App\Services\PartnerNotificationService::class)->summary($row);
         $this->assertSame('application',$row->category);$this->assertSame('/status',$summary['path']);$this->assertStringNotContainsString('PRIVATE-NOTE',$summary['body']);
+    }
+
+    public function test_private_png_and_pdf_documents_are_streamed_with_safe_headers(): void
+    {
+        $this->admin();
+        $application = $this->application();
+        $png = UploadedFile::fake()->image('test.png', 700, 500)->get();
+        foreach (['png' => [$png, 'image/png'], 'pdf' => ["%PDF-1.4\nLOCAL TEST DOCUMENT\n%%EOF", 'application/pdf']] as $extension => [$content, $mime]) {
+            $path = "partner-applications/{$application->reference}/test.{$extension}";
+            Storage::disk('local')->put($path, $content);
+            $application->update(['documents' => ['id_front' => $path]]);
+            $response = $this->get("/api/admin/partner-applications/{$application->id}/documents/id_front");
+            $response->assertOk()->assertHeader('Content-Type', $mime)->assertHeader('X-Content-Type-Options', 'nosniff');
+            $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
+            $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+            $this->assertSame($content, $response->streamedContent());
+        }
+    }
+
+    public function test_unsafe_mime_types_and_traversal_paths_cannot_be_previewed(): void
+    {
+        $this->admin();
+        $application = $this->application();
+        $path = "partner-applications/{$application->reference}/disguised.pdf";
+        Storage::disk('local')->put($path, '<html><script>alert("test")</script></html>');
+        $application->update(['documents' => ['id_front' => $path]]);
+        $this->get("/api/admin/partner-applications/{$application->id}/documents/id_front")->assertNotFound();
+        $application->update(['documents' => ['id_front' => "partner-applications/{$application->reference}/../elsewhere/private.pdf"]]);
+        $this->get("/api/admin/partner-applications/{$application->id}/documents/id_front")->assertNotFound();
     }
 
     private function admin(): User

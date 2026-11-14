@@ -273,6 +273,41 @@ class PartnerPayoutTest extends TestCase
         $this->assertSame(1,PartnerPayout::where('partner_application_id',$partner->id)->count());
     }
 
+    public function test_bank_details_are_private_and_snapshotted_for_admin_payment(): void
+    {
+        $p=$this->partner();$payload=$p->application_payload;
+        $payload['payout']=array_merge($payload['payout'],['method'=>'bank','bank'=>'Test bank','swiftCode'=>'ABCDTZ12','bankAddress'=>'Original bank address']);$p->update(['application_payload'=>$payload]);
+        $payout=$this->requestPayout($p);
+        $this->assertSame('ABCDTZ12',$payout->destination['swiftCode']);
+        $this->assertStringNotContainsString('Original bank address',DB::table('partner_payouts')->value('destination'));
+        $payload['payout']['bankAddress']='Changed bank address';$p->update(['application_payload'=>$payload]);
+        $this->getJson('/api/partner-auth/payouts')->assertOk()->assertJsonMissingPath('payouts.0.destination.swiftCode')->assertJsonMissingPath('payouts.0.destination.bankAddress');
+        $this->admin();$this->getJson('/api/admin/partner-payouts/'.$payout->id)->assertOk()->assertJsonPath('payout.fullDestination.swiftCode','ABCDTZ12')->assertJsonPath('payout.fullDestination.bankAddress','Original bank address');
+    }
+
+    public function test_mobile_money_country_and_number_are_snapshotted_and_masked(): void
+    {
+        $p=$this->partner();$payload=$p->application_payload;
+        $payload['payout']['country']='TZ';$payload['payout']['accountNumber']='+255712345678';$p->update(['application_payload'=>$payload]);
+        $payout=$this->requestPayout($p);
+        $this->assertSame('TZ',$payout->destination['country']);$this->assertSame('+255712345678',$payout->destination['accountNumber']);
+        $this->assertStringNotContainsString('+255712345678',DB::table('partner_payouts')->value('destination'));
+        $payload['payout']['country']='KE';$payload['payout']['accountNumber']='+254712345678';$p->update(['application_payload'=>$payload]);
+        $response=$this->getJson('/api/partner-auth/payouts')->assertOk();$this->assertStringNotContainsString('+255712345678',$response->getContent());
+        $this->admin();$this->getJson('/api/admin/partner-payouts/'.$payout->id)->assertOk()->assertJsonPath('payout.fullDestination.country','TZ')->assertJsonPath('payout.fullDestination.accountNumber','+255712345678');
+    }
+
+    public function test_other_payout_instructions_are_private_and_immutable_in_saved_requests(): void
+    {
+        $p=$this->partner();$payload=$p->application_payload;$payload['payout']['method']='other';
+        $payload['payout']['otherDetails']='Tanzania; Test network; OTHER-PRIVATE-123';$p->update(['application_payload'=>$payload]);
+        $payout=$this->requestPayout($p);$this->assertSame('Tanzania; Test network; OTHER-PRIVATE-123',$payout->destination['otherDetails']);
+        $this->assertStringNotContainsString('OTHER-PRIVATE-123',DB::table('partner_payouts')->value('destination'));
+        $payload['payout']['otherDetails']='New payment details';$p->update(['application_payload'=>$payload]);
+        $response=$this->getJson('/api/partner-auth/payouts')->assertOk();$this->assertStringNotContainsString('OTHER-PRIVATE-123',$response->getContent());
+        $this->admin();$this->getJson('/api/admin/partner-payouts/'.$payout->id)->assertOk()->assertJsonPath('payout.fullDestination.otherDetails','Tanzania; Test network; OTHER-PRIVATE-123');
+    }
+
     private function payload(string $amount = '10.00'): array
     {
         return ['request_key' => (string) Str::uuid(), 'expected_amount' => $amount, 'destination_confirmed' => true];

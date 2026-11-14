@@ -144,7 +144,7 @@ class PartnerAuthController extends Controller
             'referralCode' => $application->status === 'approved' ? app(\App\Services\PartnerReferralService::class)->ensureFor($application)->code : null,
             'type' => $payload['type'],
             'language' => $payload['language'],
-            'profile' => array_intersect_key($payload['profile'], array_flip(['displayName', 'legalName', 'country', 'city', 'phone', 'email'])),
+            'profile' => array_intersect_key($payload['profile'], array_flip(['firstName', 'lastName', 'displayName', 'legalName', 'country', 'city', 'phone', 'email'])),
         ];
     }
 }

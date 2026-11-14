@@ -5,20 +5,32 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class RevenueDashboard extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        return $this->stats();
+        return $this->stats($request);
     }
 
-    public function stats(): JsonResponse
+    public function stats(Request $request): JsonResponse
     {
-        $ordersQuery = Order::query()->where('status', '!=', 'draft');
-        $paidQuery = Order::query()->where('status', 'paid');
+        $input = $request->validate(['period' => ['sometimes', Rule::in(['this_month', 'all_time'])]]);
+        // Keep the historical default for existing API consumers; Revenue explicitly requests this month.
+        $period = $input['period'] ?? 'all_time';
+        $start = $period === 'this_month' ? now()->startOfMonth() : null;
+        $end = $start?->copy()->addMonth();
+        // Match this report's existing basis: order creation date, not payment settlement date.
+        $inPeriod = static function ($query) use ($start, $end) {
+            if ($start) $query->where('orders.created_at', '>=', $start)->where('orders.created_at', '<', $end);
+            return $query;
+        };
+        $ordersQuery = $inPeriod(Order::query()->where('status', '!=', 'draft'));
+        $paidQuery = $inPeriod(Order::query()->where('status', 'paid'));
 
         $totalOrders = (int) $ordersQuery->count();
         $totalRevenue = (float) ($paidQuery->sum('total_amount') ?? 0);
@@ -29,6 +41,7 @@ class RevenueDashboard extends Controller
             ->where('orders.status', '=', 'paid')
             ->where('order_items.type', '=', 'bundle')
             ->whereNotNull('order_items.bundle_id');
+        $inPeriod($paidBundleLines);
 
         /** @var Collection<string, object> */
         $totalsByCurrency = (clone $paidBundleLines)
@@ -101,7 +114,7 @@ class RevenueDashboard extends Controller
 
         $revenueByBundle = $revenueByBundle->sortByDesc('revenue')->values();
 
-        $revenueByCountry = DB::table('orders')
+        $revenueByCountry = $inPeriod(DB::table('orders'))
             ->join('trips', 'trips.order_id', '=', 'orders.id')
             ->where('orders.status', '=', 'paid')
             ->groupBy('trips.destination_country', 'orders.currency')
@@ -147,7 +160,7 @@ class RevenueDashboard extends Controller
             })
             ->values();
 
-        $ordersAllTime = DB::table('orders')
+        $ordersAllTime = $inPeriod(DB::table('orders'))
             ->join('users', 'users.id', '=', 'orders.user_id')
             ->join('trips', 'trips.order_id', '=', 'orders.id')
             ->join('order_items', 'order_items.order_id', '=', 'orders.id')
@@ -193,6 +206,13 @@ class RevenueDashboard extends Controller
         return response()->json([
             'success' => true,
             'data' => [
+                'reporting_period' => [
+                    'key' => $period,
+                    'label' => $start ? $start->format('F Y') : 'All time',
+                    'timezone' => config('app.timezone'),
+                    'starts_at' => $start?->toIso8601String(),
+                    'ends_before' => $end?->toIso8601String(),
+                ],
                 'total_revenue' => $totalRevenue,
                 'total_orders' => $totalOrders,
                 'average_order_value' => $averageOrderValue,

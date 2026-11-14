@@ -18,6 +18,32 @@ class PartnerSettingsTest extends TestCase
     'payout'=>['method'=>'mpesa','accountName'=>'Owner','accountNumber'=>'0712345678','bank'=>'','branch'=>'','nameConfirmed'=>true], 'identity'=>['idNumber'=>'PRIVATE-ID'],'consent'=>['terms'=>true]],'documents'=>['id'=>'private/file'],'submitted_at'=>now()]);
   $this->token=$this->sessionToken();$this->withToken($this->token);
  }
+ public function test_bank_details_are_normalized_validated_and_cleared_for_mobile_money(): void {
+  $body=$this->body();$body['payout']['swiftCode']=' abcdtz12xxx ';$body['payout']['bankAddress']='  Bank address test  ';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.swiftCode','ABCDTZ12XXX')->assertJsonPath('settings.payout.bankAddress','Bank address test');
+  $this->assertStringNotContainsString('Bank address test',DB::table('partner_applications')->value('application_payload'));
+  $body['expected_version']=1;$body['payout']['swiftCode']='INVALID';
+  $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.swiftCode');
+  $body['payout']['method']='mpesa';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.swiftCode','')->assertJsonPath('settings.payout.bankAddress','');
+ }
+ public function test_mobile_money_country_is_saved_and_bank_switch_clears_it(): void {
+  $body=$this->body();$body['payout']['method']='mpesa';$body['payout']['country']='KE';$body['payout']['accountNumber']='+255712345678';
+  $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.accountNumber');
+  $body['payout']['accountNumber']='+254712345678';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.country','KE')->assertJsonPath('settings.payout.accountNumber','+254712345678');
+  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='BANK-ACCOUNT';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.country','');
+ }
+ public function test_other_payout_settings_are_validated_saved_and_replaced_when_method_changes(): void {
+  $body=$this->body();$body['payout']['method']='other';$body['payout']['otherDetails']='';
+  $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.otherDetails');
+  $body['payout']['otherDetails']=' Tanzania; Test network; OTHER-PRIVATE-123 ';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.otherDetails','Tanzania; Test network; OTHER-PRIVATE-123')->assertJsonPath('settings.payout.accountNumber','');
+  $this->assertStringNotContainsString('OTHER-PRIVATE-123',DB::table('partner_settings_events')->value('changes'));
+  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='BANK-ACCOUNT';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.otherDetails','');
+ }
  private function sessionToken(?PartnerTeamMember $member=null): string {
   $token=Str::random(64);DB::table('partner_sessions')->insert(['partner_application_id'=>$this->partner->id,'partner_team_member_id'=>$member?->id,'token_hash'=>hash('sha256',$token),'expires_at'=>now()->addHour(),'created_at'=>now(),'updated_at'=>now()]);return $token;
  }

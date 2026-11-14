@@ -40,10 +40,15 @@ class PartnerPayoutService
     public function destination(PartnerApplication $application): array
     {
         $value = data_get($application->application_payload, 'payout', []);
-        return Validator::make(is_array($value) ? $value : [], [
-            'method' => ['required', Rule::in(['mpesa', 'airtel_money', 'mixx', 'halopesa', 'bank'])],
-            'accountName' => ['required', 'string', 'max:150'], 'accountNumber' => ['required', 'string', 'max:100'],
+        $value = \App\Support\PartnerMobileMoney::normalize(\App\Support\PartnerBankDetails::normalize(is_array($value) ? $value : []));
+        return Validator::make($value, [
+            'method' => ['required', Rule::in(['mpesa', 'airtel_money', 'mixx', 'halopesa', 'bank', 'other'])],
+            'accountName' => ['required', 'string', 'max:150'], 'country' => \App\Support\PartnerMobileMoney::countryRules(),
+            'accountNumber' => ['required_unless:method,other', 'nullable', 'string', 'max:100', \App\Support\PartnerMobileMoney::accountRule($value)],
             'bank' => ['required_if:method,bank', 'nullable', 'string', 'max:150'], 'branch' => ['nullable', 'string', 'max:150'],
+            'swiftCode' => ['nullable', 'string', 'max:11', \App\Support\PartnerBankDetails::SWIFT_RULE],
+            'bankAddress' => ['nullable', 'string', 'max:500'],
+            'otherDetails' => ['exclude_unless:method,other', 'required_if:method,other', 'string', 'max:2000'],
             'nameConfirmed' => ['accepted'],
         ])->validate();
     }
@@ -51,7 +56,7 @@ class PartnerPayoutService
     public function masked(array $destination): array
     {
         return ['method' => $destination['method'] ?? '', 'accountName' => $destination['accountName'] ?? '',
-            'accountMasked' => '•••• '.mb_substr($destination['accountNumber'] ?? '', -4), 'bank' => $destination['bank'] ?? ''];
+            'accountMasked' => ($destination['method'] ?? '') === 'other' ? '' : '•••• '.mb_substr($destination['accountNumber'] ?? '', -4), 'bank' => $destination['bank'] ?? ''];
     }
 
     public function summary(PartnerPayout $payout): array

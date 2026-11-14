@@ -191,6 +191,8 @@ Route::middleware(['auth:sanctum', 'verified'])->group(function () {
     Route::put('/orders/{draft_id}', [OrderController::class, 'update']);
     Route::delete('/orders/{draft_id}', [OrderController::class, 'destroy']);
 
+    Route::post('/orders/{order}/cancel-failed-payment', [\App\Http\Controllers\FailedPaymentCancellationController::class, 'store'])->whereNumber('order')->middleware('throttle:20,1');
+
     Route::post('/orders/{orderId}/prepare-evpay', [EvPayController::class, 'preparePayment']);
     Route::post('/orders/{orderId}/evpay-checkout-url', [EvPayController::class, 'createCheckoutUrl']);
 });

@@ -28,24 +28,28 @@ class EvPayCheckoutService
 
     public function prepare(Order $order): Order
     {
-        if ($order->payment_status === 'paid') {
+        return DB::transaction(function () use ($order) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if (data_get($order->metadata, 'customer_cancelled_at')) throw \Illuminate\Validation\ValidationException::withMessages(['order'=>['This failed order was cancelled. Start a new checkout.']]);
+            if ($order->payment_status === 'paid') {
+                return $order;
+            }
+
+            if ($this->shouldRegenerateReference($order->payment_reference)) {
+                $order->payment_reference = $this->generateUniquePaymentReference();
+            }
+
+            $order->payment_gateway = 'evpay';
+            $order->payment_status = 'pending';
+
+            if ($order->status !== 'paid') {
+                $order->status = 'pending_payment';
+            }
+
+            $order->save();
+
             return $order;
-        }
-
-        if ($this->shouldRegenerateReference($order->payment_reference)) {
-            $order->payment_reference = $this->generateUniquePaymentReference();
-        }
-
-        $order->payment_gateway = 'evpay';
-        $order->payment_status = 'pending';
-
-        if ($order->status !== 'paid') {
-            $order->status = 'pending_payment';
-        }
-
-        $order->save();
-
-        return $order;
+        });
     }
 
     /**
@@ -70,6 +74,8 @@ class EvPayCheckoutService
         }
 
         $order = $this->prepare($order);
+        $order->loadMissing('user');
+        if ($order->payment_status === 'paid') throw new RuntimeException('This order is already paid.');
 
         $existingUrl = $this->storedPaymentUrl($order);
         if ($order->payment_status === 'pending' && is_string($existingUrl) && $existingUrl !== '') {
@@ -278,8 +284,10 @@ class EvPayCheckoutService
             }
 
             if ($this->isFailedEvent($event, $data)) {
-                $order->payment_status = 'failed';
-                $order->status = 'payment_failed';
+                if (!data_get($order->metadata, 'customer_cancelled_at')) {
+                    $order->payment_status = 'failed';
+                    $order->status = 'payment_failed';
+                }
                 $this->clearStoredPaymentUrl($order);
                 $order->save();
 

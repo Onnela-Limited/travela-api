@@ -26,6 +26,19 @@ class PartnerAuthTest extends TestCase
         Mail::fake();
     }
 
+    public function test_owner_session_preserves_first_and_last_name_fields(): void
+    {
+        $application = $this->application('approved');
+        $payload = $application->application_payload;
+        $payload['profile']['firstName'] = 'Asha';
+        $payload['profile']['lastName'] = 'Mwinyi';
+        $application->update(['application_payload' => $payload]);
+        [$challenge, $code] = $this->issueCode();
+        $this->verify($challenge, $code)->assertOk()
+            ->assertJsonPath('partner.profile.firstName', 'Asha')
+            ->assertJsonPath('partner.profile.lastName', 'Mwinyi');
+    }
+
     public function test_requests_email_code_and_stores_only_a_hash(): void
     {
         $this->application();

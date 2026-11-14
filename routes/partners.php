@@ -19,6 +19,11 @@ Route::prefix('partner-auth')->group(function () {
     });
 });
 
+Route::middleware([\App\Http\Middleware\AuthenticatePartnerSession::class,\App\Http\Middleware\AuthorizePartnerRole::class.':owner'])->prefix('partner-auth')->group(function () {
+    Route::get('/application', [\App\Http\Controllers\Api\PartnerApplicationRevisionController::class, 'show'])->middleware('throttle:30,1');
+    Route::post('/application', [\App\Http\Controllers\Api\PartnerApplicationRevisionController::class, 'store'])->middleware('throttle:10,1');
+});
+
 Route::prefix('admin/partner-applications')->middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\Admin\PartnerApplicationReviewController::class, 'index']);
     Route::get('/{application}', [\App\Http\Controllers\Api\Admin\PartnerApplicationReviewController::class, 'show'])->whereNumber('application');

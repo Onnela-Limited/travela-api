@@ -21,9 +21,18 @@ class PartnerAuthController extends Controller
 {
     public function sendCode(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email', 'max:254'], 'language' => ['nullable', 'in:en,sw'], 'mode'=>['nullable','in:owner,staff'], 'invitation_token'=>['nullable','string','regex:/^[A-Za-z0-9]{64}$/']]);
+        $data = $request->validate(['email' => ['required', 'email', 'max:254'], 'language' => ['nullable', 'in:en,sw'], 'mode'=>['nullable','in:owner,staff,auto'], 'invitation_token'=>['nullable','string','regex:/^[A-Za-z0-9]{64}$/']]);
         $email = mb_strtolower(trim($data['email']));
         $emailHash = PartnerIdentity::emailHash($email);
+        if(($data['mode'] ?? 'owner')==='auto') {
+            $automatic=app(\App\Services\PartnerAutomaticSignIn::class);
+            $accounts=$automatic->accounts($emailHash);
+            // Reuse the existing throttled, hashed OTP and mail-delivery flow. No role details leave this endpoint.
+            $request->merge(['mode'=>isset($accounts[0]) && $accounts[0]['member_id'] ? 'staff' : 'owner','invitation_token'=>null]);
+            $response=$this->sendCode($request);
+            if($response->getStatusCode()===202) $automatic->remember($response->getData(true)['challenge_id'],$accounts);
+            return $response;
+        }
         $staff=($data['mode'] ?? 'owner')==='staff';
         $member=$staff ? app(\App\Services\PartnerTeamService::class)->loginMember($emailHash,$data['invitation_token'] ?? null) : null;
         $application=$staff ? ($member ? PartnerApplication::find($member->partner_application_id) : null) : PartnerApplication::where('email_hash',$emailHash)->orderByDesc('submitted_at')->orderByDesc('id')->first();
@@ -108,6 +117,26 @@ class PartnerAuthController extends Controller
             return ['session_token'=>$token,'expires_in'=>43200,'partner'=>$this->partnerPayload($application,$member)];
         },3);
         return $result ? response()->json($result)->header('Cache-Control','no-store') : response()->json(['message'=>'The code is invalid, expired, or already used.'],422)->header('Cache-Control','no-store');
+    }
+
+    public function verifyAutomatic(Request $request): JsonResponse
+    {
+        $data=$request->validate(['challenge_id'=>['required','uuid'],'code'=>['required','string','regex:/^[0-9]{6}$/']]);
+        return $this->automaticResponse(app(\App\Services\PartnerAutomaticSignIn::class)->verify($data['challenge_id'],$data['code']));
+    }
+    public function selectAccount(Request $request): JsonResponse
+    {
+        $data=$request->validate(['challenge_id'=>['required','uuid'],'selection_token'=>['required','string','regex:/^[A-Za-z0-9]{64}$/'],'account_id'=>['required','string','regex:/^(owner|staff):[0-9]+$/']]);
+        return $this->automaticResponse(app(\App\Services\PartnerAutomaticSignIn::class)->select($data['challenge_id'],$data['selection_token'],$data['account_id']));
+    }
+    private function automaticResponse(?array $result): JsonResponse
+    {
+        if(!$result) return response()->json(['message'=>'The code or account selection is invalid, expired, or already used.'],422)->header('Cache-Control','no-store');
+        if(isset($result['application'])) {
+            $result['partner']=$this->partnerPayload($result['application'],$result['member']);
+            unset($result['application'],$result['member']);
+        }
+        return response()->json($result)->header('Cache-Control','no-store');
     }
 
     public function me(Request $request): JsonResponse

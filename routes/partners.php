@@ -12,6 +12,8 @@ Route::post('/public/partner-applications/status', [PartnerApplicationController
 
 Route::prefix('partner-auth')->group(function () {
     Route::post('/code', [\App\Http\Controllers\Api\PartnerAuthController::class, 'sendCode'])->middleware('throttle:10,1');
+    Route::post('/auto-verify', [\App\Http\Controllers\Api\PartnerAuthController::class, 'verifyAutomatic'])->middleware('throttle:30,1');
+    Route::post('/select', [\App\Http\Controllers\Api\PartnerAuthController::class, 'selectAccount'])->middleware('throttle:30,1');
     Route::post('/verify', [\App\Http\Controllers\Api\PartnerAuthController::class, 'verify'])->middleware('throttle:30,1');
     Route::middleware(\App\Http\Middleware\AuthenticatePartnerSession::class)->group(function () {
         Route::get('/me', [\App\Http\Controllers\Api\PartnerAuthController::class, 'me']);

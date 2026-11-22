@@ -27,42 +27,32 @@ Artisan::command('user:make-admin {email}', function () {
 })->purpose('Promote a user to admin role');
 
 Artisan::command('resend:check', function () {
-    $key = (string) config('services.resend.key');
-    if ($key === '') {
+    if (trim((string) config('services.resend.key')) === '') {
         $this->error('RESEND_KEY is not set in .env');
 
         return 1;
     }
 
-    /** @var \App\Services\Email\ResendMailConfigurator $configurator */
     $configurator = app(\App\Services\Email\ResendMailConfigurator::class);
-    $verified = $configurator->verifiedDomainNames();
     $resolvedFrom = $configurator->resolvedFromAddress();
 
     $this->info('Mailer: '.config('mail.default'));
     $this->line('Configured from: '.config('mail.from.address'));
     $this->line('Resolved from: '.$resolvedFrom);
+    $this->line('Resend key: configured');
 
-    if ($verified === []) {
-        $this->warn('No verified Resend domains found.');
-        $this->line('Add and verify a domain at https://resend.com/domains');
+    if (! filter_var($resolvedFrom, FILTER_VALIDATE_EMAIL)) {
+        $this->error('The configured sender is not a valid email address.');
 
         return 1;
     }
 
-    $this->info('Verified domains:');
-    foreach ($verified as $domain) {
-        $this->line(" - {$domain}");
-    }
-
-    $configuredDomain = substr(strrchr((string) config('mail.from.address'), '@'), 1) ?: '';
-    if ($configuredDomain !== '' && ! in_array($configuredDomain, $verified, true)) {
-        $this->warn("Configured MAIL_FROM domain ({$configuredDomain}) is not verified.");
-        $this->line("Sending will use {$resolvedFrom} instead.");
-    }
+    $this->info('Local mail configuration checked; no Resend API calls made.');
+    $this->warn('Domain verification and email delivery have not been checked.');
+    $this->line('Verify the sender domain at https://resend.com/domains');
 
     return 0;
-})->purpose('Inspect Resend domain verification and sender address');
+})->purpose('Inspect Resend mail configuration without API calls');
 
 Artisan::command('mail:test {email}', function () {
     $email = (string) $this->argument('email');

@@ -86,7 +86,7 @@ class PartnerBulkTest extends TestCase
         $reference = $this->postJson('/api/partner-auth/bulk',$payload)->assertOk()->assertJsonPath('order.total','190.00')->assertJsonPath('order.status','pending_payment')->json('order.reference');
         $this->postJson('/api/partner-auth/bulk',$payload)->assertOk()->assertJsonPath('order.reference',$reference);
         $this->assertSame($p->id,PartnerBulkOrder::sole()->partner_application_id); $this->assertDatabaseCount('partner_bulk_orders',1); $this->assertDatabaseCount('partner_stock_units',0);
-        foreach ([['quantity'=>9],['quantity'=>501],['quantity'=>10.5],['sim_type'=>'invalid'],['expected_total'=>'1.00'],['purchase_confirmed'=>false],['bundle_id'=>999]] as $patch) $this->postJson('/api/partner-auth/bulk',[...$this->payload(),...$patch])->assertUnprocessable();
+        foreach ([['quantity'=>1],['quantity'=>501],['quantity'=>10.5],['sim_type'=>'invalid'],['expected_total'=>'1.00'],['purchase_confirmed'=>false],['bundle_id'=>999]] as $patch) $this->postJson('/api/partner-auth/bulk',[...$this->payload(),...$patch])->assertUnprocessable();
     }
 
     public function test_new_purchase_returns_database_defaults_and_can_immediately_open_checkout(): void
@@ -110,6 +110,22 @@ class PartnerBulkTest extends TestCase
         $this->assertDatabaseCount('orders', 1);
         $this->assertSame('pending_payment', PartnerBulkOrder::findOrFail($id)->status);
         $this->assertDatabaseCount('partner_stock_units', 0);
+    }
+
+    public function test_bulk_minimum_is_two_and_two_bundles_can_proceed_to_checkout(): void
+    {
+        $this->asPartner($this->partner());
+        $this->getJson('/api/partner-auth/bulk/catalog')->assertOk()->assertJsonPath('minimum', 2)->assertJsonPath('maximum', 500);
+        foreach ([0, 1, 1.5, 2.5, 501] as $quantity) {
+            $this->postJson('/api/partner-auth/bulk', [...$this->payload(), 'quantity' => $quantity])->assertUnprocessable();
+        }
+        $id = $this->postJson('/api/partner-auth/bulk', [...$this->payload('38.00'), 'quantity' => 2])
+            ->assertOk()->assertJsonPath('order.quantity', 2)->assertJsonPath('order.total', '38.00')
+            ->assertJsonPath('order.version', 0)->json('order.id');
+        $this->postJson('/api/partner-auth/bulk/'.$id.'/checkout', [])->assertOk()
+            ->assertJsonPath('checkoutUrl', 'https://pay.example.test/checkout');
+        $this->assertDatabaseCount('partner_bulk_orders', 1);
+        $this->assertSame('38.00', Order::sole()->total_amount);
     }
 
     public function test_negotiated_rates_must_be_configured_and_original_order_prices_are_preserved(): void

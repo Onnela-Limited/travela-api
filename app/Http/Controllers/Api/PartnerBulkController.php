@@ -28,7 +28,7 @@ class PartnerBulkController extends Controller
     public function store(Request $request, PartnerBulkService $service): JsonResponse
     {
         $application = $request->attributes->get('partner_application'); $service->eligible($application);
-        $data = $request->validate(['request_key' => ['required', 'uuid'], 'bundle_id' => ['required', 'integer'], 'quantity' => ['required', 'integer', 'min:10', 'max:500'],
+        $data = $request->validate(['request_key' => ['required', 'uuid'], 'bundle_id' => ['required', 'integer'], 'quantity' => ['required', 'integer', 'min:2', 'max:500'],
             'sim_type' => ['required', Rule::in(['esim', 'physical'])], 'expected_total' => ['required', 'string', 'regex:/^\d{1,10}\.\d{2}$/'], 'purchase_confirmed' => ['accepted']]);
         $data['team_actor']=$request->attributes->get('partner_team_member')?->id;
         return $this->json(['order' => $service->summary($service->create($application, $data))]);

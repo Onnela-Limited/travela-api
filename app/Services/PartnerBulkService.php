@@ -34,7 +34,7 @@ class PartnerBulkService
     public function catalog(PartnerApplication $application): array
     {
         $this->eligible($application); $rate = $this->rate($application);
-        return ['discountBps' => $rate, 'minimum' => 10, 'maximum' => 500,
+        return ['discountBps' => $rate, 'minimum' => 2, 'maximum' => 500,
             'paymentInstructions' => 'Pay through the secure online checkout, then wait for admin approval. SIM stock is allocated only after approval.',
             'bundles' => Bundle::where('active', true)->orderBy('id')->get()->filter(fn ($bundle) => $this->catalogBundle($bundle))->map(function ($bundle) use ($rate) {
                 $price = $this->money->cents((string) $bundle->price_usd);

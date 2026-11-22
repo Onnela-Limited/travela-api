@@ -78,7 +78,9 @@ class PartnerBulkService
                 'validity_days' => BundleValidity::DAYS, 'data_mb' => $bundle->data_mb ?? $bundle->bundle_size_in_mb,
                 'sim_type' => $data['sim_type'], 'quantity' => $data['quantity'], 'catalog_unit_cents' => $catalog,
                 'discount_bps' => $rate, 'unit_cents' => $unit, 'total_cents' => $total, 'status' => 'pending_payment']);
-            $this->event($order, empty($data['team_actor']) ? 'partner' : 'staff', $data['team_actor'] ?? $application->id, 'created'); return $order;
+            $this->event($order, empty($data['team_actor']) ? 'partner' : 'staff', $data['team_actor'] ?? $application->id, 'created');
+            // Load database defaults (including version) before returning the checkout response.
+            return $order->refresh();
         }, 3);
     }
 

@@ -89,6 +89,29 @@ class PartnerBulkTest extends TestCase
         foreach ([['quantity'=>9],['quantity'=>501],['quantity'=>10.5],['sim_type'=>'invalid'],['expected_total'=>'1.00'],['purchase_confirmed'=>false],['bundle_id'=>999]] as $patch) $this->postJson('/api/partner-auth/bulk',[...$this->payload(),...$patch])->assertUnprocessable();
     }
 
+    public function test_new_purchase_returns_database_defaults_and_can_immediately_open_checkout(): void
+    {
+        $this->asPartner($this->partner());
+        $payload = $this->payload();
+        $created = $this->postJson('/api/partner-auth/bulk', $payload)->assertOk()
+            ->assertJsonPath('order.version', 0)
+            ->assertJsonPath('order.checkoutStarted', false)
+            ->assertJsonPath('order.paymentIssue', false)
+            ->assertJsonPath('order.total', '190.00')
+            ->assertJsonPath('order.status', 'pending_payment');
+        $id = $created->json('order.id');
+
+        // A retry after an interrupted response must reuse the saved purchase.
+        $this->postJson('/api/partner-auth/bulk', $payload)->assertOk()
+            ->assertJsonPath('order.id', $id)->assertJsonPath('order.version', 0);
+        $this->postJson('/api/partner-auth/bulk/'.$id.'/checkout', [])->assertOk()
+            ->assertJsonPath('checkoutUrl', 'https://pay.example.test/checkout');
+        $this->assertDatabaseCount('partner_bulk_orders', 1);
+        $this->assertDatabaseCount('orders', 1);
+        $this->assertSame('pending_payment', PartnerBulkOrder::findOrFail($id)->status);
+        $this->assertDatabaseCount('partner_stock_units', 0);
+    }
+
     public function test_negotiated_rates_must_be_configured_and_original_order_prices_are_preserved(): void
     {
         $this->asPartner($this->partner('airline'));

@@ -25,13 +25,28 @@ class PartnerApplicationTest extends TestCase
         Storage::fake('local');
     }
 
+    public function test_bank_swift_and_address_are_required_for_application_submission(): void
+    {
+        foreach (['swiftCode', 'bankAddress'] as $field) {
+            foreach ([null, '', '   '] as $value) {
+                $payload = $this->payload();
+                $payload['payout'] = array_merge($payload['payout'], ['method' => 'bank', 'bank' => 'Test bank', 'swiftCode' => 'ABCDTZ12', 'bankAddress' => 'Test address']);
+                $payload['payout'][$field] = $value;
+                $this->sendApplication($payload)->assertUnprocessable()->assertJsonValidationErrors('application.payout.'.$field);
+            }
+            unset($payload['payout'][$field]);
+            $this->sendApplication($payload)->assertUnprocessable()->assertJsonValidationErrors('application.payout.'.$field);
+        }
+        $this->assertDatabaseCount('partner_applications', 0);
+    }
+
     public function test_bank_account_rejects_non_digits_and_preserves_leading_zeros(): void
     {
         foreach (['123abc','123-45','12 34','+123','1.23','１２３',str_repeat('9',101)] as $number) {
-            $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['accountNumber']=$number;
+            $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['swiftCode']='ABCDTZ12';$payload['payout']['bankAddress']='Test address';$payload['payout']['accountNumber']=$number;
             $this->sendApplication($payload)->assertUnprocessable()->assertJsonValidationErrors('application.payout.accountNumber');
         }
-        $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['accountNumber']='000012345678901234567890';
+        $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['swiftCode']='ABCDTZ12';$payload['payout']['bankAddress']='Test address';$payload['payout']['accountNumber']='000012345678901234567890';
         $this->sendApplication($payload)->assertCreated();
         $this->assertSame('000012345678901234567890', PartnerApplication::sole()->application_payload['payout']['accountNumber']);
     }
@@ -56,7 +71,7 @@ class PartnerApplicationTest extends TestCase
         $this->assertArrayNotHasKey('profile', $response->json('application'));
     }
 
-    public function test_optional_bank_fields_are_saved_and_invalid_swift_is_rejected(): void
+    public function test_required_bank_fields_are_saved_and_invalid_swift_is_rejected(): void
     {
         $payload=$this->payload();$payload['payout']=array_merge($payload['payout'],['method'=>'bank','bank'=>'Test bank','swiftCode'=>' abcdtz12 ','bankAddress'=>'  Private bank address  ']);
         $this->sendApplication($payload)->assertCreated();

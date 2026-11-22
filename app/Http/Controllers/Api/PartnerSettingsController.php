@@ -30,7 +30,7 @@ class PartnerSettingsController extends Controller
    'payout'=>['required','array:method,country,accountName,accountNumber,bank,branch,swiftCode,bankAddress,otherDetails,nameConfirmed'],
    'payout.method'=>['required',Rule::in(['mpesa','airtel_money','mixx','halopesa','bank','other'])],
    'payout.accountName'=>['required','string','max:150'],'payout.country'=>\App\Support\PartnerMobileMoney::countryRules(),'payout.accountNumber'=>['required_unless:payout.method,other','nullable','string','max:100',\App\Support\PartnerMobileMoney::accountRule($request->input('payout')),\App\Support\PartnerBankDetails::accountRule($request->input('payout'))],
-   'payout.bank'=>['required_if:payout.method,bank','nullable','string','max:150'],'payout.branch'=>['nullable','string','max:150'],'payout.swiftCode'=>['nullable','string','max:11',\App\Support\PartnerBankDetails::SWIFT_RULE],'payout.bankAddress'=>['nullable','string','max:500'],'payout.otherDetails'=>['exclude_unless:payout.method,other','required_if:payout.method,other','string','max:2000'],'payout.nameConfirmed'=>['accepted'],
+   'payout.bank'=>['required_if:payout.method,bank','nullable','string','max:150'],'payout.branch'=>['nullable','string','max:150'],'payout.swiftCode'=>['required_if:payout.method,bank','nullable','string','max:11',\App\Support\PartnerBankDetails::SWIFT_RULE],'payout.bankAddress'=>['required_if:payout.method,bank','nullable','string','max:500'],'payout.otherDetails'=>['exclude_unless:payout.method,other','required_if:payout.method,other','string','max:2000'],'payout.nameConfirmed'=>['accepted'],
   ]);
   $app=DB::transaction(function()use($request,$data){
    $app=PartnerApplication::whereKey($request->attributes->get('partner_application')->id)->lockForUpdate()->firstOrFail();

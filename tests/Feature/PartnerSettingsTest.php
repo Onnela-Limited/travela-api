@@ -18,6 +18,17 @@ class PartnerSettingsTest extends TestCase
     'payout'=>['method'=>'mpesa','accountName'=>'Owner','accountNumber'=>'0712345678','bank'=>'','branch'=>'','nameConfirmed'=>true], 'identity'=>['idNumber'=>'PRIVATE-ID'],'consent'=>['terms'=>true]],'documents'=>['id'=>'private/file'],'submitted_at'=>now()]);
   $this->token=$this->sessionToken();$this->withToken($this->token);
  }
+ public function test_bank_swift_and_address_are_required_for_settings_updates(): void {
+  foreach (['swiftCode','bankAddress'] as $field) {
+   foreach ([null,'','   '] as $value) {
+    $body=$this->body();$body['payout'][$field]=$value;
+    $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.'.$field);
+   }
+   $body=$this->body();unset($body['payout'][$field]);
+   $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.'.$field);
+  }
+  $this->assertDatabaseCount('partner_settings_events',0);
+ }
  public function test_bank_details_are_normalized_validated_and_cleared_for_mobile_money(): void {
   $body=$this->body();$body['payout']['swiftCode']=' abcdtz12xxx ';$body['payout']['bankAddress']='  Bank address test  ';
   $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.swiftCode','ABCDTZ12XXX')->assertJsonPath('settings.payout.bankAddress','Bank address test');
@@ -56,7 +67,7 @@ class PartnerSettingsTest extends TestCase
   $token=Str::random(64);DB::table('partner_sessions')->insert(['partner_application_id'=>$this->partner->id,'partner_team_member_id'=>$member?->id,'token_hash'=>hash('sha256',$token),'expires_at'=>now()->addHour(),'created_at'=>now(),'updated_at'=>now()]);return $token;
  }
  private function body(): array {return ['expected_version'=>0,'profile'=>['displayName'=>'Updated hotel','country'=>'Tanzania','city'=>'Arusha','phone'=>'+255712345679'],
-  'payout'=>['method'=>'bank','accountName'=>'Owner','accountNumber'=>'00012345678901234567890','bank'=>'Test Bank','branch'=>'Test branch','nameConfirmed'=>true]];}
+  'payout'=>['method'=>'bank','accountName'=>'Owner','accountNumber'=>'00012345678901234567890','bank'=>'Test Bank','branch'=>'Test branch','swiftCode'=>'ABCDTZ12','bankAddress'=>'Test address','nameConfirmed'=>true]];}
  public function test_owner_reads_private_settings_and_saves_encrypted_audited_changes(): void {
   $this->getJson('/api/partner-auth/settings')->assertOk()->assertHeader('Cache-Control','no-store, private')->assertJsonPath('settings.version',0)->assertJsonMissingPath('settings.documents');
   $this->postJson('/api/partner-auth/settings',$this->body())->assertOk()->assertJsonPath('settings.version',1)->assertJsonPath('settings.profile.displayName','Updated hotel');

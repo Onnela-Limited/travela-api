@@ -8,7 +8,7 @@ Route::post('/public/partner-applications', [PartnerApplicationController::class
 
 // Both credentials are sent in the body, never in a URL.
 Route::post('/public/partner-applications/status', [PartnerApplicationController::class, 'show'])
-    ->middleware('throttle:30,1');
+    ->middleware([\App\Http\Middleware\AuthenticatePartnerSession::class, \App\Http\Middleware\AuthorizePartnerRole::class.':owner', 'throttle:30,1']);
 
 Route::prefix('partner-auth')->group(function () {
     Route::post('/code', [\App\Http\Controllers\Api\PartnerAuthController::class, 'sendCode'])->middleware('throttle:10,1');

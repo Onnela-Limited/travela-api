@@ -35,9 +35,9 @@ class PartnerReferralService
 
     public function active(string $code): ?PartnerReferral
     {
-        $code = strtoupper(trim($code));
-        if (! preg_match('/^TRV-[A-Z0-9]{8}$/', $code)) return null;
-        return PartnerReferral::where('code', $code)->whereHas('application', fn ($query) => $query->where('status', 'approved'))->first();
+        $code = preg_replace('/^TRV-/', '', strtoupper(trim($code)));
+        if (! preg_match('/\A[A-Z0-9]{8}\z/', $code)) return null;
+        return PartnerReferral::whereIn('code', ['TRV-'.$code, $code])->whereHas('application', fn ($query) => $query->where('status', 'approved'))->first();
     }
 
     public function forCheckout(?string $code, User $customer): ?PartnerReferral

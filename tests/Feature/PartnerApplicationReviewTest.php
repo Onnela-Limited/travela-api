@@ -129,7 +129,9 @@ class PartnerApplicationReviewTest extends TestCase
         $this->review($application, 'info_requested', 0, $message)->assertOk()
             ->assertJsonPath('application.status', 'info_requested')->assertJsonPath('application.reviewVersion', 1)
             ->assertJsonPath('application.history.0.reviewer', $admin->name)->assertJsonPath('application.history.0.message', $message);
-        $this->postJson('/api/public/partner-applications/status', ['reference' => $application->reference, 'submission_key' => $application->submission_key])->assertOk()
+        $token=Str::random(64);
+        DB::table('partner_sessions')->insert(['partner_application_id'=>$application->id,'token_hash'=>hash('sha256',$token),'expires_at'=>now()->addHour(),'created_at'=>now(),'updated_at'=>now()]);
+        $this->withToken($token)->postJson('/api/public/partner-applications/status', ['reference' => $application->reference, 'submission_key' => $application->submission_key])->assertOk()
             ->assertJsonPath('application.status', 'info_requested')->assertJsonPath('application.reviewMessage', $message)
             ->assertJsonMissingPath('application.reviewer_id')->assertJsonMissingPath('application.history');
         $this->assertStringNotContainsString($message, DB::table('partner_applications')->where('id', $application->id)->value('review_message'));

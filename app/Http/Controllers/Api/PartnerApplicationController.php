@@ -102,6 +102,7 @@ class PartnerApplicationController extends Controller
         ]);
 
         $application = PartnerApplication::query()
+            ->whereKey($request->attributes->get('partner_application')?->id ?? 0)
             ->select(['reference', 'status', 'submitted_at', 'review_version', 'review_message', 'reviewed_at'])
             ->where('reference', $credentials['reference'])
             ->where('submission_key', $credentials['submission_key'])

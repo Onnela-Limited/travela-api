@@ -32,7 +32,7 @@ class PartnerSettingsTest extends TestCase
   $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.accountNumber');
   $body['payout']['accountNumber']='+254712345678';
   $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.country','KE')->assertJsonPath('settings.payout.accountNumber','+254712345678');
-  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='BANK-ACCOUNT';
+  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='000987654321';
   $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.country','');
  }
  public function test_other_payout_settings_are_validated_saved_and_replaced_when_method_changes(): void {
@@ -41,21 +41,29 @@ class PartnerSettingsTest extends TestCase
   $body['payout']['otherDetails']=' Tanzania; Test network; OTHER-PRIVATE-123 ';
   $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.otherDetails','Tanzania; Test network; OTHER-PRIVATE-123')->assertJsonPath('settings.payout.accountNumber','');
   $this->assertStringNotContainsString('OTHER-PRIVATE-123',DB::table('partner_settings_events')->value('changes'));
-  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='BANK-ACCOUNT';
+  $body['expected_version']=1;$body['payout']['method']='bank';$body['payout']['accountNumber']='000987654321';
   $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.otherDetails','');
+ }
+ public function test_bank_account_rejects_non_digits_and_keeps_leading_zeros(): void {
+  foreach(['123abc','123-45','12 34','+123','1.23','１２３','9'."\n".'9',str_repeat('9',101)] as $number) {
+   $body=$this->body();$body['payout']['accountNumber']=$number;
+   $this->postJson('/api/partner-auth/settings',$body)->assertUnprocessable()->assertJsonValidationErrors('payout.accountNumber');
+  }
+  $body=$this->body();$body['payout']['accountNumber']='000012345678901234567890';
+  $this->postJson('/api/partner-auth/settings',$body)->assertOk()->assertJsonPath('settings.payout.accountNumber','000012345678901234567890');
  }
  private function sessionToken(?PartnerTeamMember $member=null): string {
   $token=Str::random(64);DB::table('partner_sessions')->insert(['partner_application_id'=>$this->partner->id,'partner_team_member_id'=>$member?->id,'token_hash'=>hash('sha256',$token),'expires_at'=>now()->addHour(),'created_at'=>now(),'updated_at'=>now()]);return $token;
  }
  private function body(): array {return ['expected_version'=>0,'profile'=>['displayName'=>'Updated hotel','country'=>'Tanzania','city'=>'Arusha','phone'=>'+255712345679'],
-  'payout'=>['method'=>'bank','accountName'=>'Owner','accountNumber'=>'NEW-PRIVATE-ACCOUNT','bank'=>'Test Bank','branch'=>'Test branch','nameConfirmed'=>true]];}
+  'payout'=>['method'=>'bank','accountName'=>'Owner','accountNumber'=>'00012345678901234567890','bank'=>'Test Bank','branch'=>'Test branch','nameConfirmed'=>true]];}
  public function test_owner_reads_private_settings_and_saves_encrypted_audited_changes(): void {
   $this->getJson('/api/partner-auth/settings')->assertOk()->assertHeader('Cache-Control','no-store, private')->assertJsonPath('settings.version',0)->assertJsonMissingPath('settings.documents');
   $this->postJson('/api/partner-auth/settings',$this->body())->assertOk()->assertJsonPath('settings.version',1)->assertJsonPath('settings.profile.displayName','Updated hotel');
-  $this->getJson('/api/partner-auth/settings')->assertJsonPath('settings.payout.accountNumber','NEW-PRIVATE-ACCOUNT');
+  $this->getJson('/api/partner-auth/settings')->assertJsonPath('settings.payout.accountNumber','00012345678901234567890');
   $fresh=$this->partner->fresh();$this->assertSame('Legal',$fresh->application_payload['profile']['legalName']);$this->assertSame('owner@example.test',$fresh->application_payload['profile']['email']);
   $this->assertSame('PRIVATE-ID',$fresh->application_payload['identity']['idNumber']);$this->assertSame(['id'=>'private/file'],$fresh->documents);$this->assertSame('approved',$fresh->status);
-  foreach([DB::table('partner_applications')->value('application_payload'),DB::table('partner_settings_events')->value('changes')] as $encrypted)$this->assertStringNotContainsString('NEW-PRIVATE-ACCOUNT',$encrypted);
+  foreach([DB::table('partner_applications')->value('application_payload'),DB::table('partner_settings_events')->value('changes')] as $encrypted)$this->assertStringNotContainsString('00012345678901234567890',$encrypted);
   $audit=json_decode(Crypt::decryptString(DB::table('partner_settings_events')->value('changes')),true);$this->assertSame('0712345678',$audit['before']['payout']['accountNumber']);
   Mail::assertNothingSent();Http::assertNothingSent();
  }

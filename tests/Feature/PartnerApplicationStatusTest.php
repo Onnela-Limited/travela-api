@@ -18,6 +18,7 @@ class PartnerApplicationStatusTest extends TestCase
         (require database_path('migrations/2026_10_26_000001_add_partner_authentication.php'))->up();
         (require database_path('migrations/2026_10_26_000002_add_partner_application_reviews.php'))->up();
         (require database_path('migrations/2026_10_29_000001_create_partner_referrals.php'))->up();
+        (require database_path('migrations/2026_11_01_000001_create_partner_teams.php'))->up();
     }
 
     public function test_returns_current_status_for_every_review_outcome_without_private_details(): void
@@ -37,6 +38,7 @@ class PartnerApplicationStatusTest extends TestCase
     public function test_reference_alone_cannot_read_status(): void
     {
         $application = $this->application();
+        $this->login($application);
         $this->postJson('/api/public/partner-applications/status', ['reference' => $application->reference])
             ->assertUnprocessable()->assertJsonValidationErrors('submission_key');
     }
@@ -44,6 +46,7 @@ class PartnerApplicationStatusTest extends TestCase
     public function test_wrong_key_and_unknown_reference_return_the_same_response(): void
     {
         $application = $this->application();
+        $this->login($application);
         $wrongKey = $this->postJson('/api/public/partner-applications/status', [
             'reference' => $application->reference,
             'submission_key' => (string) Str::uuid(),
@@ -60,6 +63,7 @@ class PartnerApplicationStatusTest extends TestCase
     {
         $first = $this->application();
         $second = $this->application();
+        $this->login($first);
         $this->postJson('/api/public/partner-applications/status', [
             'reference' => $first->reference,
             'submission_key' => $second->submission_key,
@@ -76,6 +80,7 @@ class PartnerApplicationStatusTest extends TestCase
 
     public function test_get_requests_and_malformed_credentials_are_rejected(): void
     {
+        $this->login($this->application());
         $this->getJson('/api/public/partner-applications/status')->assertStatus(405);
         $this->postJson('/api/public/partner-applications/status', [
             'reference' => str_repeat('x', 65),
@@ -85,10 +90,36 @@ class PartnerApplicationStatusTest extends TestCase
 
     private function lookup(PartnerApplication $application)
     {
+        $this->login($application);
         return $this->postJson('/api/public/partner-applications/status', [
             'reference' => $application->reference,
             'submission_key' => $application->submission_key,
         ]);
+    }
+
+    public function test_saved_submission_credentials_without_login_cannot_read_status(): void
+    {
+        $application=$this->application();
+        $this->postJson('/api/public/partner-applications/status',['reference'=>$application->reference,'submission_key'=>$application->submission_key])->assertUnauthorized()->assertJsonMissingPath('application');
+    }
+
+    public function test_another_owner_cannot_read_status_even_with_valid_submission_credentials(): void
+    {
+        $first=$this->application();$second=$this->application();$this->login($first);
+        $this->postJson('/api/public/partner-applications/status',['reference'=>$second->reference,'submission_key'=>$second->submission_key])->assertNotFound();
+    }
+
+    public function test_expired_session_cannot_read_status(): void
+    {
+        $application=$this->application();$this->login($application);$this->travel(61)->minutes();
+        $this->postJson('/api/public/partner-applications/status',['reference'=>$application->reference,'submission_key'=>$application->submission_key])->assertUnauthorized();
+    }
+
+    private function login(PartnerApplication $application): void
+    {
+        $token=Str::random(64);
+        DB::table('partner_sessions')->insert(['partner_application_id'=>$application->id,'token_hash'=>hash('sha256',$token),'expires_at'=>now()->addHour(),'created_at'=>now(),'updated_at'=>now()]);
+        $this->withToken($token);
     }
 
     private function application(): PartnerApplication

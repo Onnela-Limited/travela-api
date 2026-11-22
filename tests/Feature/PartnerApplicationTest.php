@@ -25,6 +25,17 @@ class PartnerApplicationTest extends TestCase
         Storage::fake('local');
     }
 
+    public function test_bank_account_rejects_non_digits_and_preserves_leading_zeros(): void
+    {
+        foreach (['123abc','123-45','12 34','+123','1.23','１２３',str_repeat('9',101)] as $number) {
+            $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['accountNumber']=$number;
+            $this->sendApplication($payload)->assertUnprocessable()->assertJsonValidationErrors('application.payout.accountNumber');
+        }
+        $payload=$this->payload();$payload['payout']['method']='bank';$payload['payout']['bank']='Test bank';$payload['payout']['accountNumber']='000012345678901234567890';
+        $this->sendApplication($payload)->assertCreated();
+        $this->assertSame('000012345678901234567890', PartnerApplication::sole()->application_payload['payout']['accountNumber']);
+    }
+
     public function test_individual_application_stores_private_documents_and_encrypted_details(): void
     {
         $response = $this->sendApplication();

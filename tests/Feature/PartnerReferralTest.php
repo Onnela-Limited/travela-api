@@ -39,7 +39,7 @@ class PartnerReferralTest extends TestCase
         $token = $this->token($application);
         $first = $this->withToken($token)->getJson('/api/partner-auth/referral')->assertOk();
         $code = $first->json('referral.code');
-        $this->assertMatchesRegularExpression('/^TRV-[A-Z0-9]{8}$/', $code);
+        $this->assertMatchesRegularExpression('/^[A-Z0-9]{8}$/', $code);
         $application->update(['application_payload' => [...$application->application_payload, 'profile' => [...$application->application_payload['profile'], 'displayName' => 'Changed name']]]);
         $this->withToken($token)->getJson('/api/partner-auth/referral')->assertOk()->assertJsonPath('referral.code', $code);
         $second = app(PartnerReferralService::class)->ensureFor($this->application('approved'));
@@ -88,9 +88,24 @@ class PartnerReferralTest extends TestCase
         $second = $this->application('approved');
         $attempt = 0;
         Str::createRandomStringsUsing(function () use (&$attempt) { return ++$attempt === 1 ? 'AAAAAAAA' : 'BBBBBBBB'; });
-        try { $this->assertSame('TRV-BBBBBBBB', app(PartnerReferralService::class)->ensureFor($second)->code); }
+        try { $this->assertSame('BBBBBBBB', app(PartnerReferralService::class)->ensureFor($second)->code); }
         finally { Str::createRandomStringsNormally(); }
-        $this->assertSame('TRV-AAAAAAAA', PartnerReferral::where('partner_application_id', $first->id)->sole()->code);
+        $this->assertSame('AAAAAAAA', PartnerReferral::where('partner_application_id', $first->id)->sole()->code);
+    }
+
+    public function test_short_and_legacy_codes_resolve_to_the_same_partner_without_changing_database_identity(): void
+    {
+        $application=$this->application('approved');
+        $referral=PartnerReferral::create(['partner_application_id'=>$application->id,'code'=>'TRV-OLD12345']);
+        $service=app(PartnerReferralService::class);
+        foreach(['OLD12345','TRV-OLD12345',' old12345 ','trv-old12345'] as $code) {
+            $this->assertSame($referral->id,$service->active($code)->id);
+            $this->getJson('/api/public/partner-referrals/'.trim($code))->assertOk()->assertJsonPath('referral.code','OLD12345');
+        }
+        $this->assertSame('TRV-OLD12345',DB::table('partner_referrals')->where('id',$referral->id)->value('code'));
+        $this->assertSame('https://shop.example.test/r/OLD12345',$service->url($referral));
+        $application->update(['status'=>'suspended']);
+        $this->assertNull($service->active('OLD12345'));$this->assertNull($service->active('TRV-OLD12345'));
     }
 
     private function token(PartnerApplication $application): string

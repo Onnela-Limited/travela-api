@@ -91,7 +91,7 @@ class StorePartnerApplicationRequest extends FormRequest
             'application.payout.method' => ['required', Rule::in(['mpesa', 'airtel_money', 'mixx', 'halopesa', 'bank', 'other'])],
             'application.payout.accountName' => ['required', 'string', 'max:150'],
             'application.payout.country' => \App\Support\PartnerMobileMoney::countryRules(),
-            'application.payout.accountNumber' => ['required_unless:application.payout.method,other', 'nullable', 'string', 'max:100', \App\Support\PartnerMobileMoney::accountRule($this->input('application.payout'))],
+            'application.payout.accountNumber' => ['required_unless:application.payout.method,other', 'nullable', 'string', 'max:100', \App\Support\PartnerMobileMoney::accountRule($this->input('application.payout')), \App\Support\PartnerBankDetails::accountRule($this->input('application.payout'))],
             'application.payout.bank' => ['required_if:application.payout.method,bank', 'nullable', 'string', 'max:150'],
             'application.payout.branch' => ['nullable', 'string', 'max:150'],
             'application.payout.swiftCode' => ['nullable', 'string', 'max:11', \App\Support\PartnerBankDetails::SWIFT_RULE],

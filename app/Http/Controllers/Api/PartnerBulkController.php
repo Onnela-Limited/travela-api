@@ -82,6 +82,18 @@ class PartnerBulkController extends Controller
             return $this->json(['message'=>'Online checkout is temporarily unavailable. Your order is saved; retry payment later.'])->setStatusCode(503);
         }
     }
+    public function cancel(Request $request, int $bulk, PartnerBulkService $service): JsonResponse
+    {
+        $data = $request->validate(['expected_version' => ['required', 'integer', 'min:0'], 'cancellation_confirmed' => ['required', 'accepted']]);
+        try {
+            $order = app(\App\Services\PartnerBulkPaymentService::class)->cancel(
+                $request->attributes->get('partner_application'), $bulk, (int) $data['expected_version'],
+                $request->attributes->get('partner_team_member')?->id);
+            return $this->json(['order' => $service->summary($order)]);
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
+            return $this->json(['message' => 'Checkout is being prepared. Refresh before cancelling.'])->setStatusCode(409);
+        }
+    }
     public function refreshPayment(Request $request, int $bulk, PartnerBulkService $service): JsonResponse
     {
         $order = app(\App\Services\PartnerBulkPaymentService::class)->refresh($request->attributes->get('partner_application'),$bulk);

@@ -31,11 +31,11 @@ class PartnerBulkPaymentService
 
     public function sync(PartnerBulkOrder $bulk): PartnerBulkOrder
     {
-        if ($bulk->status !== 'pending_payment' || ! $bulk->payment_order_id) return $bulk;
+        if (!in_array($bulk->status, ['pending_payment', 'cancelled'], true) || ! $bulk->payment_order_id) return $bulk;
         return DB::transaction(function () use ($bulk) {
             PartnerApplication::whereKey($bulk->partner_application_id)->lockForUpdate()->firstOrFail();
             $bulk = PartnerBulkOrder::whereKey($bulk->id)->lockForUpdate()->firstOrFail();
-            if ($bulk->status !== 'pending_payment' || ! $this->clear($bulk)) return $bulk;
+            if (!in_array($bulk->status, ['pending_payment', 'cancelled'], true) || ! $this->clear($bulk)) return $bulk;
             $payment = Order::findOrFail($bulk->payment_order_id);
             $bulk->status = 'paid'; $bulk->paid_at = $payment->paid_at; $bulk->payment_reference = $payment->payment_reference;
             $bulk->received_currency = 'USD'; $bulk->received_cents = $bulk->total_cents; $bulk->version++; $bulk->save();
@@ -81,11 +81,54 @@ class PartnerBulkPaymentService
         });
     }
 
+    public function cancel(PartnerApplication $application, int $id, int $version, ?int $staffActor = null): PartnerBulkOrder
+    {
+        // Share checkout's lock so an in-flight request cannot start a new payment after cancellation.
+        return Cache::lock('partner_bulk_checkout_'.$id, 90)->block(5, function () use ($application, $id, $version, $staffActor) {
+            app(PartnerBulkService::class)->eligible($application);
+            $candidate = PartnerBulkOrder::whereKey($id)->where('partner_application_id', $application->id)->firstOrFail();
+            if ($candidate->payment_order_id) {
+                $payment = Order::findOrFail($candidate->payment_order_id);
+                $events = collect(data_get($payment->payment_callback, 'deliveries', []))->pluck('event')->push(data_get($payment->payment_callback, 'last.event'));
+                abort_if($events->intersect(['payment.on_hold', 'payment.refunded', 'payment.reversed'])->isNotEmpty(), 409, 'This payment needs review. Contact Travela before cancelling.');
+            }
+            $this->refresh($application, $id);
+            return DB::transaction(function () use ($application, $id, $version, $staffActor) {
+                $application = PartnerApplication::whereKey($application->id)->lockForUpdate()->firstOrFail();
+                app(PartnerBulkService::class)->eligible($application);
+                $bulk = PartnerBulkOrder::whereKey($id)->where('partner_application_id', $application->id)->lockForUpdate()->firstOrFail();
+                // A retry after an interrupted response must not duplicate the audit event.
+                if ($bulk->status === 'cancelled') return $bulk;
+                abort_unless($bulk->version === $version, 409, 'Order changed. Refresh before cancelling.');
+                abort_unless($bulk->status === 'pending_payment', 409, 'Only unpaid orders can be cancelled. Refresh the payment status.');
+                if ($bulk->payment_order_id) {
+                    $payment = Order::whereKey($bulk->payment_order_id)->lockForUpdate()->firstOrFail();
+                    abort_if($payment->paid_at || in_array($payment->payment_status, ['paid', 'completed'], true) || in_array($payment->status, ['paid', 'completed'], true), 409, 'Payment is already recorded. This order cannot be cancelled.');
+                    $events = collect(data_get($payment->payment_callback, 'deliveries', []))->pluck('event')->push(data_get($payment->payment_callback, 'last.event'));
+                    abort_if($events->intersect(['payment.on_hold', 'payment.refunded', 'payment.reversed'])->isNotEmpty(), 409, 'This payment needs review. Contact Travela before cancelling.');
+                    $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+                    $metadata['customer_cancelled_at'] = now()->toIso8601String();
+                    $metadata['cancelled_payment_status'] = $payment->payment_status;
+                    $payload = is_array($payment->payment_payload) ? $payment->payment_payload : [];
+                    if (isset($payload['response']) && is_array($payload['response'])) $payload['response']['paymentUrl'] = null;
+                    $payment->update(['status' => 'cancelled', 'payment_status' => 'cancelled', 'metadata' => $metadata, 'payment_payload' => $payload]);
+                }
+                $bulk->status = 'cancelled'; $bulk->version++; $bulk->save();
+                DB::table('partner_bulk_events')->insert(['partner_bulk_order_id' => $bulk->id, 'stock_unit_id' => null,
+                    'actor_type' => $staffActor ? 'staff' : 'partner', 'actor_id' => $staffActor ?? $application->id,
+                    'action' => 'cancelled', 'message' => null, 'created_at' => now()]);
+                // Cancellation is local, not a gateway refund or void. A late verified payment
+                // still passes through sync() and returns the purchase to paid/admin review.
+                return $bulk;
+            }, 3);
+        });
+    }
+
     public function refresh(PartnerApplication $application, int $id): PartnerBulkOrder
     {
         app(PartnerBulkService::class)->eligible($application);
         $bulk = PartnerBulkOrder::whereKey($id)->where('partner_application_id',$application->id)->firstOrFail();
-        if ($bulk->status === 'pending_payment' && $bulk->payment_order_id) app(EvPayCheckoutService::class)->reconcilePendingOrder(Order::findOrFail($bulk->payment_order_id));
+        if (in_array($bulk->status, ['pending_payment', 'cancelled'], true) && $bulk->payment_order_id) app(EvPayCheckoutService::class)->reconcilePendingOrder(Order::findOrFail($bulk->payment_order_id));
         return $this->sync($bulk);
     }
 }

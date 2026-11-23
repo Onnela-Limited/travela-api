@@ -128,6 +128,74 @@ class PartnerBulkTest extends TestCase
         $this->assertSame('38.00', Order::sole()->total_amount);
     }
 
+    public function test_partner_cancellation_requires_confirmation_scope_and_current_version(): void
+    {
+        $p = $this->partner(); $bulk = $this->bulk($p);
+        $url = '/api/partner-auth/bulk/'.$bulk->id.'/cancel';
+        $this->withToken('')->postJson($url, ['expected_version' => 0, 'cancellation_confirmed' => true])->assertUnauthorized();
+        $this->asPartner($this->partner());
+        $this->postJson($url, ['expected_version' => 0, 'cancellation_confirmed' => true])->assertNotFound();
+        $this->asPartner($p);
+        $this->postJson($url, ['expected_version' => 0])->assertUnprocessable();
+        $this->postJson($url, ['expected_version' => 0, 'cancellation_confirmed' => false])->assertUnprocessable();
+        $this->postJson($url, ['expected_version' => 99, 'cancellation_confirmed' => true])->assertConflict();
+        $this->postJson($url, ['expected_version' => 0, 'cancellation_confirmed' => true])->assertOk()->assertJsonPath('order.status', 'cancelled')->assertJsonPath('order.version', 1);
+        $this->postJson($url, ['expected_version' => 0, 'cancellation_confirmed' => true])->assertOk();
+        $this->assertSame(1, DB::table('partner_bulk_events')->where('action', 'cancelled')->count());
+        $this->assertDatabaseCount('partner_stock_units', 0);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/checkout', [])->assertConflict();
+    }
+
+    public function test_unpaid_started_checkout_can_be_cancelled_without_deleting_payment_records(): void
+    {
+        $p = $this->partner(); $bulk = $this->bulk($p);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/checkout', [])->assertOk();
+        $payment = Order::findOrFail($bulk->fresh()->payment_order_id);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/cancel', ['expected_version' => 0, 'cancellation_confirmed' => true])->assertOk()->assertJsonPath('order.status', 'cancelled');
+        $this->assertSame('cancelled', $payment->fresh()->payment_status);
+        $this->assertNotEmpty(data_get($payment->fresh()->metadata, 'customer_cancelled_at'));
+        $this->assertNull(data_get($payment->fresh()->payment_payload, 'response.paymentUrl'));
+        $this->assertDatabaseCount('orders', 1);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/checkout', [])->assertConflict();
+        $this->assertDatabaseCount('partner_stock_units', 0);
+    }
+
+    public function test_cancellation_never_hides_a_late_verified_gateway_payment(): void
+    {
+        $bulk = $this->bulk($this->partner());
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/checkout', [])->assertOk();
+        $payment = Order::findOrFail($bulk->fresh()->payment_order_id);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/cancel', ['expected_version' => 0, 'cancellation_confirmed' => true])->assertOk();
+        $this->webhook($payment, 190)->assertOk();
+        $this->assertSame('paid', $payment->fresh()->payment_status);
+        $this->assertSame('paid', $bulk->fresh()->status);
+        $this->assertSame(2, $bulk->fresh()->version);
+        $this->assertDatabaseCount('partner_stock_units', 0);
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/cancel', ['expected_version' => 2, 'cancellation_confirmed' => true])->assertConflict();
+    }
+
+    public function test_paid_and_held_payments_cannot_be_cancelled_by_the_partner(): void
+    {
+        $bulk = $this->bulk($this->partner()); $this->pay($bulk)->assertOk();
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/cancel', ['expected_version' => 1, 'cancellation_confirmed' => true])->assertConflict();
+        $this->assertSame('paid', $bulk->fresh()->status);
+        $held = $this->bulk($this->partner());
+        $this->postJson('/api/partner-auth/bulk/'.$held->id.'/checkout', [])->assertOk();
+        Order::findOrFail($held->fresh()->payment_order_id)->update(['payment_callback' => ['last' => ['event' => 'payment.on_hold']]]);
+        $this->postJson('/api/partner-auth/bulk/'.$held->id.'/cancel', ['expected_version' => 0, 'cancellation_confirmed' => true])->assertConflict();
+        $this->assertSame('pending_payment', $held->fresh()->status);
+    }
+
+    public function test_failed_cancellation_audit_rolls_back_both_purchase_and_payment(): void
+    {
+        $bulk = $this->bulk($this->partner());
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/checkout', [])->assertOk();
+        Schema::drop('partner_bulk_events');
+        $this->postJson('/api/partner-auth/bulk/'.$bulk->id.'/cancel', ['expected_version' => 0, 'cancellation_confirmed' => true])->assertStatus(500);
+        $this->assertSame('pending_payment', $bulk->fresh()->status);
+        $this->assertSame('pending', Order::findOrFail($bulk->fresh()->payment_order_id)->payment_status);
+    }
+
     public function test_negotiated_rates_must_be_configured_and_original_order_prices_are_preserved(): void
     {
         $this->asPartner($this->partner('airline'));

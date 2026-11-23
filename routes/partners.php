@@ -59,6 +59,7 @@ Route::middleware(\App\Http\Middleware\AuthenticatePartnerSession::class)->prefi
     Route::get('/bulk', [\App\Http\Controllers\Api\PartnerBulkController::class, 'index'])->middleware(\App\Http\Middleware\AuthorizePartnerRole::class.':owner,manager');
     Route::post('/bulk', [\App\Http\Controllers\Api\PartnerBulkController::class, 'store'])->middleware('throttle:10,1')->middleware(\App\Http\Middleware\AuthorizePartnerRole::class.':owner,manager');
     Route::post('/bulk/{bulk}/checkout', [\App\Http\Controllers\Api\PartnerBulkController::class, 'checkout'])->whereNumber('bulk')->middleware('throttle:10,1')->middleware(\App\Http\Middleware\AuthorizePartnerRole::class.':owner,manager');
+    Route::post('/bulk/{bulk}/cancel', [\App\Http\Controllers\Api\PartnerBulkController::class, 'cancel'])->whereNumber('bulk')->middleware('throttle:10,1')->middleware(\App\Http\Middleware\AuthorizePartnerRole::class.':owner,manager');
     Route::post('/bulk/{bulk}/refresh-payment', [\App\Http\Controllers\Api\PartnerBulkController::class, 'refreshPayment'])->whereNumber('bulk')->middleware('throttle:30,1')->middleware(\App\Http\Middleware\AuthorizePartnerRole::class.':owner,manager');
     Route::get('/stock', [\App\Http\Controllers\Api\PartnerBulkController::class, 'stock']);
     Route::post('/stock/{unit}/assign', [\App\Http\Controllers\Api\PartnerBulkController::class, 'assign'])->whereNumber('unit')->middleware('throttle:10,1');
